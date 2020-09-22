@@ -60,6 +60,8 @@ namespace eval ::MergeTools:: {
 
     variable base
     variable ext
+
+    variable skip_zero 1
 }
 
 # help/usage/error message and online documentation.
@@ -521,7 +523,7 @@ proc ::MergeTools::mrg { args } {
                 }
 
                 overlap {
-                    report $molid $sel [lindex $newargs 0]
+                    report_overlap $molid $sel [lindex $newargs 0]
                 }
             }
             set retval 0
@@ -636,7 +638,8 @@ proc ::MergeTools::merge { molid base_sel ext_sel } {
 }
 
 
-proc ::MergeTools::overlap { molid base_sel ext_sel } {
+proc ::MergeTools::overlap { molid base_sel ext_sel {ex "ex"} } {
+    # select compounds in ext_sel that overlap with compounds in base_sel
     variable overlap_distance
     variable compound
 
@@ -644,19 +647,17 @@ proc ::MergeTools::overlap { molid base_sel ext_sel } {
     set ext_sel [ validate_atomselect $molid $ext_sel ]
 
     set overlap [atomselect $molid \
-        "([$base_sel text]) and (same $compound as (exwithin $overlap_distance of [$ext_sel text]))"]
-
-    #vmdcon -info [format "%-30.30s" "#atoms in $base_sel overlap with $ext_sel:"] \
-    #  [format "%12d" [$overlap num]]
+        "([$ext_sel text]) and (same $compound as (${ex}within $overlap_distance of [$base_sel text]))"]
 
     $overlap global
     return $overlap
 }
 
 
-proc ::MergeTools::report_compounds { molid base_sel {indlvl 0} {linewidth 140} } {
+proc ::MergeTools::report_compounds { molid base_sel {indlvl 0} {linewidth 100} } {
     variable compound
     variable compname
+    variable skip_zero
 
     set base_sel [validate_atomselect $molid $base_sel]
 
@@ -664,7 +665,6 @@ proc ::MergeTools::report_compounds { molid base_sel {indlvl 0} {linewidth 140} 
     set mobile_compounds [ mrg -sel $base_sel get mobile ]
     set dispensable_compounds [ mrg -sel $base_sel get dispensable ]
     set forbidden_compounds [ mrg -sel $base_sel get forbidden ]
-
 
     set complabels {"mobile" "immobile" "dispensable" "forbidden"}
     set complists [ list $mobile_compounds $immobile_compounds $dispensable_compounds $forbidden_compounds ]
@@ -698,10 +698,11 @@ proc ::MergeTools::report_compounds { molid base_sel {indlvl 0} {linewidth 140} 
         [ format "%12d" [ llength $unique_compounds ] ]
 
     incr indlvl
-    set indent [expr 2*($indlvl)]
-    set remwidth [expr $linewidth-$indent]
-    set fmtstr "%${indent}.${indent}s%-${remwidth}.${remwidth}s"
     foreach complabel $complabels complist $complists {
+        set indent [expr 2*($indlvl)]
+        set remwidth [expr $linewidth-$indent]
+        set fmtstr "%${indent}.${indent}s%-${remwidth}.${remwidth}s"
+
         if { [ llength $complist ] == 0 } {
             continue
         }
@@ -713,28 +714,32 @@ proc ::MergeTools::report_compounds { molid base_sel {indlvl 0} {linewidth 140} 
         }
 
         set cur_sel [atomselect $molid "$cur_sel_txt"]
-        #vmdcon -info [format "%2.2s%-138.138s" "- " "$complabel $compname {$complist} in '[$base_sel text]' with '[$ext_sel text]':"]
+        if { $skip_zero && [$cur_sel num] == 0 } {
+            continue
+        }
+        set unique_compounds [ lsort -unique -integer [ $cur_sel get $compound ] ]
 
         vmdcon -info [format $fmtstr $parstr "#atoms in $complabel $compname {$complist} ('[ $cur_sel text ]'):"] \
             [ format "%12d" [ $cur_sel num ] ]
-
-        set unique_compounds [ lsort -unique -integer [ $cur_sel get $compound ] ]
         vmdcon -info [format $fmtstr $indstr "#${compound}s in $complabel $compname {$complist} ('[ $cur_sel text ]'):"] \
             [ format "%12d" [ llength $unique_compounds ] ]
 
         incr indlvl
-        set indent [expr 2*($indlvl)]
-        set remwidth [expr $linewidth-$indent]
-        set fmtstr "%${indent}.${indent}s%-${remwidth}.${remwidth}s"
         foreach bc $complist {
+            set indent [expr 2*($indlvl)]
+            set remwidth [expr $linewidth-$indent]
+            set fmtstr "%${indent}.${indent}s%-${remwidth}.${remwidth}s"
 
             set cur_sel_txt "[$base_sel text] and $compname $bc"
             set cur_sel [atomselect $molid "$cur_sel_txt"]
+            if { $skip_zero && [$cur_sel num] == 0 } {
+                continue
+            }
+            set unique_compounds [ lsort -unique -integer [ $cur_sel get $compound ] ]
+
             vmdcon -info [format $fmtstr $parstr "#atoms in $complabel $compname '$bc' ('[ $cur_sel text ]'):"] \
                 [format "%12d" [$cur_sel num]]
-
-            set unique_compounds [ lsort -unique -integer [ $cur_sel get $compound ] ]
-            vmdcon -info [format $fmtstr $indstr "#${compound}s in $complabel $compname {$complist} ('[ $cur_sel text ]'):"] \
+            vmdcon -info [format $fmtstr $indstr "#${compound}s in $complabel $compname '$bc' ('[ $cur_sel text ]'):"] \
                 [format "%12d" [ llength $unique_compounds ] ]
 
             unset cur_sel_txt
@@ -745,76 +750,168 @@ proc ::MergeTools::report_compounds { molid base_sel {indlvl 0} {linewidth 140} 
     incr indlvl -1
 }
 
-proc ::MergeTools::report_overlap { molid base_sel ext_sel } {
+proc ::MergeTools::report_overlap { molid base_sel ext_sel {indlvl 0} {linewidth 100} } {
+    # report compounds in ext_sel that overlap with compounds in base_sel
     variable overlap_distance
     variable compound
     variable compname
+    variable skip_zero
 
-    variable immobile_compounds
-    variable mobile_compounds
-    variable dispensable_compounds
-    variable forbidden_overlap_compounds
+    set immobile_compounds [mrg get immobile]
+    set mobile_compounds [mrg get mobile]
+    set dispensable_compounds [mrg get dispensable]
+    set forbidden_compounds [mrg get forbidden]
     # per default, latter is join of mobile and immobile
 
     set base_sel [validate_atomselect $molid $base_sel]
     set ext_sel [validate_atomselect $molid $ext_sel]
-    # set base_id [validate_atomselect $molid $base_sel]
-    # set ext_id [validate_atomselect $molid $ext_sel]
     # TODO: base_id and ext_id must be equal, check
 
-    set complabels {"mobile" "immobile" "dispensable"}
-    set complists [list $mobile_compounds $immobile_compounds $dispensable_compounds]
+    set complabels {"mobile" "immobile" "dispensable" "forbidden"}
+    set complists [list $mobile_compounds $immobile_compounds $dispensable_compounds $forbidden_compounds]
+
+    set title [ format "overlap report (molid: %d, '%s' in '%s')" $molid [ $ext_sel text ] [ $base_sel text ] ]
+    set bar [ string repeat "=" [string length $title] ]
+
+    set parstr "- "
+    set indstr " "
+
+    set indent [expr 2*($indlvl)]
+    set remwidth [expr $linewidth-$indent]
+    set fmtstr "%${indent}.${indent}s%-${remwidth}.${remwidth}s"
 
     vmdcon -info ""
-    vmdcon -info "==============="
-    vmdcon -info "overlap report:"
-    vmdcon -info "==============="
+    vmdcon -info [format $fmtstr $indstr "$bar"]
+    vmdcon -info [format $fmtstr $indstr "$title"]
+    vmdcon -info [format $fmtstr $indstr "$bar"]
     vmdcon -info ""
 
-    # total overlap of base into ext
-    set boe [overlap $molid $base_sel $ext_sel]
-    vmdcon -info [format "%-140.140s" "#atoms in '[$base_sel text]' overlapping into '[$ext_sel text]':"] \
-      [format "%12d" [$boe num]]
+    incr indlvl
+    set indent [expr 2*($indlvl)]
+    set remwidth [expr $linewidth-$indent]
+    set fmtstr "%${indent}.${indent}s%-${remwidth}.${remwidth}s"
 
-    set ext_forbidden_overlap_compound_sel_txt "[$ext_sel text] and $compname $forbidden_overlap_compounds"
+    # eob: ext overlap with  base
+    set eob [overlap $molid $base_sel $ext_sel]
+    # ueob: unique compounds in ext overlap with base
+    set ueob [ lsort -unique -integer [ $eob get $compound ] ]
+    vmdcon -info [ format $fmtstr $parstr "#atoms overlapping:" ] [ format "%12d" [ $eob num ] ]
+    vmdcon -info [ format $fmtstr $indstr "#${compound}s overlapping:" ] [ format "%12d" [ llength $ueob ] ]
 
+    incr indlvl
+    foreach ext_complabel $complabels ext_complist $complists {
+        set indent [expr 2*($indlvl)]
+        set remwidth [expr $linewidth-$indent]
+        set fmtstr "%${indent}.${indent}s%-${remwidth}.${remwidth}s"
 
-    foreach base_complabel $complabels base_complist $complists {
-        vmdcon -info [format "%2.2s%-138.138s" "- " "overlap of $base_complabel $compname {$base_complist} in '[$base_sel text]' with '[$ext_sel text]':"]
-        foreach bc $base_complist {
-            set compound_base_sel_txt "[$base_sel text] and $compname $bc"
-            # base compound overlapping ext: bcoe
-            set bcoe [overlap $molid $compound_base_sel_txt $ext_sel]
-            vmdcon -info [format "%4.4s%-136.136s" "- " "#atoms in '[$base_sel text]' $base_complabel $bc overlapping into '[$ext_sel text]':"] \
-                [format "%12d" [$bcoe num]]
-
-            # unique base compound overlapping ext: ubcoe
-            set ubcoe [ lsort -unique -integer [ $bcoe get $compound ] ]
-            vmdcon -info [format "%4.4s%-136.136s" "  " "#${compound}s in '[$base_sel text]' $base_complabel $bc overlapping into '[$ext_sel text]':"] \
-                [format "%12d" [ llength $ubcoe ] ]
-
-            foreach ext_complabel $complabels ext_complist $complists {
-                vmdcon -info [format "%6.6s%-134.134s" "- " "overlap of $base_complabel  $compname {$base_complist} in '[$base_sel text]' with $ext_complabel $compname {$ext_complist} in '[$ext_sel text]':"]
-                foreach ec $ext_complist {
-                    set compound_ext_sel_txt "[$ext_sel text] and $compname $ec"
-                    # base compound overlapping ext compound: bcoec
-                    set bcoec [overlap $molid $compound_base_sel_txt $compound_ext_sel_txt]
-                    vmdcon -info [format "%8.8s%-132.132s" "- " "#atoms in [$base_sel text] $base_complabel $bc overlapping into '[$ext_sel text]' $ext_complabel:"] \
-                        [format "%12d" [$bcoec num]]
-
-                    # unique base compound overlapping ext compound: ubcoec
-                    set ubcoec [ lsort -unique -integer [ $bcoec get $compound ] ]
-                    vmdcon -info [format "%8.8s%-132.132s" "  " "#${compound}s in '[$base_sel text]' $base_complabel $bc overlapping into '[$ext_sel text]' $ext_complabel:"] \
-                        [format "%12d" [ llength $ubcoec ] ]
-
-                    unset bcoec
-                    unset ubcoec
-                }
-            }
-            unset bcoe
-            unset ubcoe
+        if { [ llength $ext_complist ] == 0 } {
+            continue
         }
+        if {[$ext_sel text] eq "all"} {
+            set ext_complist_sel_txt "$compname $ext_complist"
+        } else {
+            set ext_complist_sel_txt "[$ext_sel text] and $compname $ext_complist"
+        }
+        # elob: ext compname list overlap with base
+        set elob [overlap $molid $base_sel $ext_complist_sel_txt]
+        if { $skip_zero && [$elob num] == 0 } {
+            continue
+        }
+        set uelob [ lsort -unique -integer [ $elob get $compound ] ]
+
+        vmdcon -info [ format $fmtstr $parstr "#atoms in $ext_complabel $compname {$ext_complist} overlapping:" ] [ format "%12d" [ $elob num ] ]
+        vmdcon -info [ format $fmtstr $indstr "#${compound}s in $ext_complabel $compname {$ext_complist} overlapping:" ] [ format "%12d" [ llength $uelob ] ]
+
+        incr indlvl
+        foreach ec $ext_complist {
+            set indent [expr 2*($indlvl)]
+            set remwidth [expr $linewidth-$indent]
+            set fmtstr "%${indent}.${indent}s%-${remwidth}.${remwidth}s"
+
+            if {[$ext_sel text] eq "all"} {
+                set ext_compname_sel_txt "$compname $ec"
+            } else {
+                set ext_compname_sel_txt "[$ext_sel text] and $compname $ec"
+            }
+            # ecob: ext compname overlap with base
+            set ecob [ overlap $molid $base_sel $ext_compname_sel_txt ]
+            if { $skip_zero && [$ecob num] == 0 } {
+                continue
+            }
+            # uecob: unique compounds inext compname overlap with base
+            set uecob [ lsort -unique -integer [ $ecob get $compound ] ]
+            vmdcon -info [ format $fmtstr $parstr "#atoms in $ext_complabel $compname '$ec' overlapping:" ] [ format "%12d" [ $ecob num ] ]
+            vmdcon -info [ format $fmtstr $indstr "#${compound}s in $ext_complabel $compname '$ec' overlapping:" ] [ format "%12d" [ llength $uecob ] ]
+
+            incr indlvl
+            foreach base_complabel $complabels base_complist $complists {
+                set indent [expr 2*($indlvl)]
+                set remwidth [expr $linewidth-$indent]
+                set fmtstr "%${indent}.${indent}s%-${remwidth}.${remwidth}s"
+
+                if { [ llength $base_complist ] == 0 } {
+                    continue
+                }
+                if {[$base_sel text] eq "all"} {
+                    set base_complist_sel_txt "$compname $base_complist"
+                } else {
+                    set base_complist_sel_txt "[$base_sel text] and $compname $base_complist"
+                }
+                # ecobl: ext compname overlap with base compname list
+                set ecobl [ overlap $molid $base_complist_sel_txt $ext_compname_sel_txt ]
+                if { $skip_zero && [$ecobl num] == 0 } {
+                    continue
+                }
+                # elob: unique compname in ext overlap with base compname list
+                set uecobl [ lsort -unique -integer [ $ecobl get $compound ] ]
+
+                vmdcon -info [ format $fmtstr $parstr "#atoms in $ext_complabel $compname '$ec' overlapping $base_complabel $compname {$base_complist}:" ] \
+                    [ format "%12d" [ $ecobl num ] ]
+                vmdcon -info [ format $fmtstr $indstr "#${compound}s in $ext_complabel $compname '$ec' overlapping $base_complabel $compname {$base_complist}:" ] \
+                    [ format "%12d" [ llength $uecobl ] ]
+
+                incr indlvl
+                foreach bc $base_complist {
+                    set indent [expr 2*($indlvl)]
+                    set remwidth [expr $linewidth-$indent]
+                    set fmtstr "%${indent}.${indent}s%-${remwidth}.${remwidth}s"
+
+                    if {[$base_sel text] eq "all"} {
+                        set base_compname_sel_txt "$compname $bc"
+                    } else {
+                        set base_compname_sel_txt "[$base_sel text] and $compname $bc"
+                    }
+                    # ecobc: ext compound overlap with base compound
+                    set ecobc [overlap $molid $base_compname_sel_txt $ext_compname_sel_txt]
+                    if { $skip_zero && [$ecobc num] == 0 } {
+                        continue
+                    }
+                    # uecobc: unique compname in  ext compound overlapping with base compound
+                    set uecobc [ lsort -unique -integer [ $ecobc get $compound ] ]
+
+                    vmdcon -info [ format $fmtstr $parstr "#atoms in $ext_complabel $compname '$ec' overlapping $base_complabel $compname '$bc':" ] \
+                        [ format "%12d" [ $ecobc num ] ]
+                    vmdcon -info [ format $fmtstr $indstr "#${compound}s in $ext_complabel $compname '$ec' overlapping $base_complabel $compname '$bc':" ] \
+                        [ format "%12d" [ llength $uecobc ] ]
+
+                    unset ecobc
+                    unset uecobc
+                }
+                incr indlvl -1
+                unset ecobl
+                unset uecobl
+            }
+            incr indlvl -1
+            unset ecob
+            unset uecob
+        }
+        incr indlvl -1
+        unset elob
+        unset uelob
     }
+    incr indlvl -1
+    unset eob
+    unset ueob
 }
 
 proc ::MergeTools::move { molid base_sel ext_sel { position_limits "" } } {
@@ -854,10 +951,10 @@ proc ::MergeTools::move { molid base_sel ext_sel { position_limits "" } } {
     # latter is identifier as in input file (starts at 1 for standard numbering)
     # but might not be unique
 
-    set forbidden_overlap_compounds [ list {*}$immobile_compounds {*}$mobile_compounds ]
+    set forbidden_compounds [ list {*}$immobile_compounds {*}$mobile_compounds ]
 
     set nmoved 0
-    set ext_forbidden_overlap_compound_sel_txt "[$ext_sel text] and $compname $forbidden_overlap_compounds"
+    set ext_forbidden_overlap_compound_sel_txt "[$ext_sel text] and $compname $forbidden_compounds"
     foreach compnameval $mobile_compounds {
         set base_compound_sel_txt "[$base_sel text] and $compname $compnameval"
 
@@ -895,7 +992,7 @@ proc ::MergeTools::move { molid base_sel ext_sel { position_limits "" } } {
 
                 # TODO: outsource mini report
                 # report on overlapping molecules
-                foreach ext_compnameval $forbidden_overlap_compounds {
+                foreach ext_compnameval $forbidden_compounds {
                     set ext_compound_sel_txt "[$ext_sel text] and $compname $ext_compnameval"
 
                     # base compound overlapping ext compound: bcoec
@@ -963,7 +1060,7 @@ proc ::MergeTools::remove { molid base_sel remove_sel } {
 
     # copy periodic box
     molinfo $keep_id set {a b c alpha beta gamma} \
-        [molinfo $molid get {a b c alpha beta gamma}]
+        [molinfo $molid get {a b c alpha beta gamma}]a
 }
 
 interp alias {} mrg {} ::MergeTools::mrg
