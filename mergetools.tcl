@@ -508,7 +508,23 @@ proc ::MergeTools::mrg { args } {
             set retval [merge $molid $sel [lindex $newargs 0]]
         }
         "overlap" {
-            set retval [overlap $molid $sel [lindex $newargs 0]]
+            set key [lindex $newargs 0]
+            set newargs [lrange $newargs 1 end]
+            switch -nocase -- $key {
+                twoway -
+                bi -
+                bidirectional {
+                    set retval [overlap_bidirectional $molid $sel [lindex $newargs 0]]
+                }
+                oneway -
+                uni -
+                unidirectional {
+                    set retval [overlap $molid $sel [lindex $newargs 0]]
+                }
+                default {
+                    set retval [overlap $molid $sel $key]
+                }
+            }
         }
         "move" {
             set retval [move $molid $sel [lindex $newargs 0]]
@@ -631,9 +647,7 @@ proc ::MergeTools::merge { molid base_sel ext_sel } {
 
     # mol off $base_id
     # mol off $ext_id
-
     mol rename $merged_id merged
-
     return $merged_id
 }
 
@@ -653,8 +667,24 @@ proc ::MergeTools::overlap { molid base_sel ext_sel {ex "ex"} } {
     return $overlap
 }
 
+proc ::MergeTools::overlap_bidirectional { molid base_sel ext_sel {ex "ex"} } {
+    # select union of compounds in ext_sel that overlap with compounds in
+    # base_sel and compunds in base_sel that overlap with compounds in ext_sel
+    variable overlap_distance
+    variable compound
 
-proc ::MergeTools::report_compounds { molid base_sel {indlvl 0} {linewidth 100} } {
+    # backward overlap: from ext into base
+    set backward_overlap [ overlap $molid $base_sel $ext_sel ]
+    # forward overlap: from base into ext
+    set forward_overlap [ overlap $molid $ext_sel $base_sel ]
+
+    set overlap [ atomselect $molid "([ $backward_overlap text ]) or ([ $forward_overlap text ])" ]
+
+    $overlap global
+    return $overlap
+}
+
+proc ::MergeTools::report_compounds { molid base_sel {indlvl 0} {linewidth 180} } {
     variable compound
     variable compname
     variable skip_zero
@@ -750,7 +780,7 @@ proc ::MergeTools::report_compounds { molid base_sel {indlvl 0} {linewidth 100} 
     incr indlvl -1
 }
 
-proc ::MergeTools::report_overlap { molid base_sel ext_sel {indlvl 0} {linewidth 100} } {
+proc ::MergeTools::report_overlap { molid base_sel ext_sel {indlvl 0} {linewidth 180} } {
     # report compounds in ext_sel that overlap with compounds in base_sel
     variable overlap_distance
     variable compound
@@ -914,139 +944,172 @@ proc ::MergeTools::report_overlap { molid base_sel ext_sel {indlvl 0} {linewidth
     unset ueob
 }
 
-proc ::MergeTools::move { molid base_sel ext_sel { position_limits "" } } {
+
+proc ::MergeTools::move { molid base_sel overlap_sel { position_limits "" } {indlvl 0} {linewidth 180} } {
     # position_limits: [ [ float float float ] [ float float float] ]
     #   with the first nexted lists containing the minimum x, y, and z
     #   coordinates and the second containing the corresponding maxima for
     #   randomly generated positions.
-    variable maxit
+    # variable maxit
 
     variable overlap_distance
     variable compound
     variable compname
 
-    variable immobile_compounds
-    variable mobile_compounds
-    variable dispensable_compounds
-
     set base_sel [ validate_atomselect $molid $base_sel ]
-    set ext_sel [ validate_atomselect $molid $ext_sel ]
+    set overlap_sel [ validate_atomselect $molid $overlap_sel ]
+
+    set mobile_compounds [ mrg -sel $base_sel get mobile ]
+    set forbidden_compounds [ mrg -sel $base_sel get forbidden ]
+
     if {$position_limits eq ""} {
         set position_limits [ measure minmax $base_sel ]
     }
 
-    vmdcon -info "Lims: $position_limits"
-    vmdcon -info [ format "random position limits: %26s; %26s" \
+    set parstr "- "
+    set indstr " "
+
+    set indent [expr 2*($indlvl)]
+    set remwidth [expr $linewidth-$indent]
+    set fmtstr "%${indent}.${indent}s%-${remwidth}.${remwidth}s"
+
+    vmdcon -info [ format $fmtstr $indstr "Lims: $position_limits" ]
+    vmdcon -info [ format $fmtstr $indstr [format "random position limits: %26s; %26s" \
         [ format "%8.4f %8.4f %8.4f" {*}[ lindex $position_limits 0 ] ] \
-        [ format "%8.4f %8.4f %8.4f" {*}[ lindex $position_limits 1 ] ] ]
+        [ format "%8.4f %8.4f %8.4f" {*}[ lindex $position_limits 1 ] ] ] ]
 
     set position_origin [ lindex $position_limits 0 ]
-    vmdcon -info [ format "random position origin: %26s" \
-        [ format "%8.4f %8.4f %8.4f" {*}$position_origin ] ]
+    vmdcon -info [ format $fmtstr $indstr [ format "random position origin: %26s" \
+        [ format "%8.4f %8.4f %8.4f" {*}$position_origin ] ] ]
     set position_offset [ vecscale -1.0 [ vecsub {*}$position_limits ] ]
-    vmdcon -info [ format "random position offset: %26s" \
-        [ format "%8.4f %8.4f %8.4f" {*}$position_offset ] ]
+    vmdcon -info [ format $fmtstr $indstr [ format "random position offset: %26s" \
+        [ format "%8.4f %8.4f %8.4f" {*}$position_offset ] ] ]
     # vmd's "residue" and "resid" differ:
     # former is a zero-based consecutive index,
     # latter is identifier as in input file (starts at 1 for standard numbering)
     # but might not be unique
 
-    set forbidden_compounds [ list {*}$immobile_compounds {*}$mobile_compounds ]
-
     set nmoved 0
-    set ext_forbidden_overlap_compound_sel_txt "[$ext_sel text] and $compname $forbidden_compounds"
-    foreach compnameval $mobile_compounds {
-        set base_compound_sel_txt "[$base_sel text] and $compname $compnameval"
+    set nfailed 0
 
-        # base compound overlapping ext: bcoe
-        set overlapping_compounds [overlap $molid $base_compound_sel_txt $ext_forbidden_overlap_compound_sel_txt]
-        vmdcon -info [format "%2.2s%-138.138s" "- " "#atoms in '$base_compound_sel_txt' overlapping with '$ext_forbidden_overlap_compound_sel_txt':"] \
-            [format "%12d" [$overlapping_compounds num]]
-
-        # unique base compound overlapping ext: ubcoe
-        set unique_overlapping_compound_ids [ lsort -unique -integer [ $overlapping_compounds get $compound ] ]
-        vmdcon -info [format "%2.2s%-138.138s" "  " "#${compound}s in '$base_compound_sel_txt' overlapping with '$ext_forbidden_overlap_compound_sel_txt':"] \
-            [format "%12d" [ llength $unique_overlapping_compound_ids ] ]
-
-        foreach compid $unique_overlapping_compound_ids {
-            vmdcon -info [ format "%4.4s%-136.136s" "- " "teating overlapping $compname $compnameval $compound $compid" ]
-            set cur [ atomselect $molid "$compound $compid" ]
-            if { [ $cur num ] == 0 } {
-                vmdcon -warn [ format "%4.4s%-136.136s" " " "selection empty, already removed!" ]
-                continue
-            }
-
-            vmdcon -info [ format "%4.4s%-136.136s" " " "#atoms in current $compname $compnameval $compound $compid:" ] \
-                [format "%12d" [$cur num]]
-
-            # only try n times to avoid endless loop
-            for {set i 0} {$i<$maxit} {incr i} {
-                vmdcon -info [format "%6.6s%-134.134s" "- " "iteration $i:" ]
-
-                set cur_overlapping [overlap $molid $cur $ext_forbidden_overlap_compound_sel_txt]
-                vmdcon -info [format "%6.6s%-134.134s" " " "#atoms in forbidden overlap with $compname $compnameval $compound $compid:"] \
-                    [format "%12d" [$cur_overlapping num]]
-                set unique_cur_overlapping_ids [ lsort -unique -integer [ $cur_overlapping get $compound ] ]
-                vmdcon -info [format "%6.6s%-134.134s" "  " "#${compound}s in forbidden overlap with $compname $compnameval $compound $compid:"] \
-                    [format "%12d" [ llength $unique_cur_overlapping_ids ] ]
-
-                # TODO: outsource mini report
-                # report on overlapping molecules
-                foreach ext_compnameval $forbidden_compounds {
-                    set ext_compound_sel_txt "[$ext_sel text] and $compname $ext_compnameval"
-
-                    # base compound overlapping ext compound: bcoec
-                    set cur_overlapping_compound [overlap $molid $cur $ext_compound_sel_txt]
-                    vmdcon -info [format "%8.8s%-132.132s" "- " "#atoms of $compname $ext_compnameval in forbidden overlap with $compname $compnameval $compound $compid:"] \
-                        [format "%12d" [$cur_overlapping_compound num]]
-
-                    # unique base compound overlapping ext compound: ubcoec
-                    set unique_cur_overlapping_compound_ids [ lsort -unique -integer [ $cur_overlapping_compound get $compound ] ]
-                    vmdcon -info [format "%8.8s%-132.132s" "  " "#${compound}s of $compname $ext_compnameval in forbidden overlap with $compname $compnameval $compound $compid:"] \
-                        [format "%12d" [ llength $unique_cur_overlapping_compound_ids ] ]
-
-                    unset cur_overlapping_compound
-                    unset unique_cur_overlapping_compound_ids
-                }
-
-                # check whether position is alright:
-                # we allow overlap with dispensable_compounds, which are supposed
-                # to be removec subsequently removed, but not with anything else
-                # within immobile_compounds and mobile_compounds, i.e. other
-                # surfactant chains, counterions or substrate.
-                if { [ $cur_overlapping num ] == 0} {
-                    vmdcon -info [ format "%4.4s%-136.136s" "- " "found suitable location in iteration $i." ]
-                    incr nmoved
-                    break
-                }
-
-                set random_3vec [ list [ expr rand() ] [ expr rand() ] [ expr rand() ] ]
-                vmdcon -info [ format "%6.6s%-134.134s" " " [ format "random 3-vector: %26s" \
-                    [ format "%8.4f %8.4f %8.4f" {*}$random_3vec ] ] ]
-
-                set random_position [ vecadd $position_origin [ \
-                    vecmul $random_3vec $position_offset] ]
-                vmdcon -info [ format "%6.6s%-134.134s" " " [ format "random position: %26s" \
-                    [ format "%8.4f %8.4f %8.4f" {*}$random_position ] ] ]
-
-                set cur_position [measure center $cur]
-                vmdcon -info [ format "%6.6s%-134.134s" " " [ format "  current position: %26s" \
-                    [ format "%8.4f %8.4f %8.4f" {*}$cur_position ] ] ]
-
-                set cur_offset [vecsub $random_position $cur_position]
-                vmdcon -info [ format "%6.6s%-134.134s" " " [ format "move by: %26s" \
-                    [ format "%8.4f %8.4f %8.4f" {*}$cur_offset ] ] ]
-                $cur moveby $cur_offset
-
-                unset cur_overlapping
-                unset unique_cur_overlapping_ids
-            }
-            unset cur
-        }
-        unset overlapping_compounds
-        unset unique_overlapping_compound_ids
+    if {[$base_sel text] eq "all"} {
+        set base_forbidden_sel [atomselect $molid "$compname $forbidden_compounds"]
+    } else {
+        set base_forbidden_sel [atomselect $molid "[$base_sel text] and $compname $forbidden_compounds"]
     }
-    vmdcon -info [ format "successfully moved %3d ${compound}s." $nmoved ]
+    vmdcon -info ""
+    vmdcon -info [ format $fmtstr $indstr "forbidden ${compound}s" ]
+    vmdcon -info ""
+    report_compounds $molid $base_forbidden_sel $indlvl
+
+    # explicit loop here meant to ensure specific order in movements
+    incr indlvl
+    foreach compnameval $mobile_compounds {
+        set indent [expr 2*($indlvl)]
+        set remwidth [expr $linewidth-$indent]
+        set fmtstr "%${indent}.${indent}s%-${remwidth}.${remwidth}s"
+
+        set overlap_compname_sel [atomselect $molid "[$overlap_sel text] and $compname $compnameval" ]
+
+        vmdcon -info ""
+        vmdcon -info [ format $fmtstr $indstr "overlap ${compound}s of $compname $compnameval" ]
+        vmdcon -info ""
+        report_compounds $molid $overlap_compname_sel $indlvl
+
+
+        # report_overlap $molid $base_forbidden_sel $overlap_compname_sel $indlvl
+
+        set unique_overlap_compound_ids [ lsort -unique -integer [ $overlap_compname_sel get $compound ] ]
+
+        incr indlvl
+        foreach compid $unique_overlap_compound_ids {
+            set indent [expr 2*($indlvl)]
+            set remwidth [expr $linewidth-$indent]
+            set fmtstr "%${indent}.${indent}s%-${remwidth}.${remwidth}s"
+
+            vmdcon -info [ format $fmtstr $parstr "$compname $compnameval $compound $compid" ]
+
+            set cur_move_sel [ atomselect $molid "$compound $compid" ]
+            set cur_forbidden_sel [ atomselect $molid "[$base_forbidden_sel text] and not $compound $compid" ]
+
+            vmdcon -info ""
+            vmdcon -info [ format $fmtstr $indstr "forbidden ${compound}s without current $compound $compid" ]
+            vmdcon -info ""
+            report_compounds $molid $cur_forbidden_sel $indlvl
+
+            if { [ $cur_move_sel num ] == 0 } {
+                vmdcon -error [ format $fmtstr $indstr "selection empty, already removed!" ]
+                break
+            }
+
+            set ret [ move_one $molid $cur_forbidden_sel $cur_move_sel $position_origin $position_offset $indlvl $linewidth]
+            if { $ret } { incr nmoved } else { incr nfailed }
+            unset cur_move_sel
+            unset cur_forbidden_sel
+        }
+        incr indlvl -1
+
+        unset overlap_compname_sel
+        unset unique_overlap_compound_ids
+    }
+    incr indlvl -1
+    if { $nfailed > 0 } {
+        vmdcon -warn [ format $fmtstr $indstr [ format "faile moving %3d ${compound}s." $nfailed ] ]
+    }
+    vmdcon -info [ format $fmtstr $indstr [ format "successfully moved %3d ${compound}s." $nmoved ] ]
+}
+
+proc ::MergeTools::move_one { molid base_sel move_sel position_origin position_offset {indlvl 0} {linewidth 180} } {
+    # move move_sel until it has no overlap with base_sel anymore
+    variable maxit
+
+    set parstr "- "
+    set indstr " "
+
+    incr indlvl
+    # only try n times to avoid endless loop
+    for {set i 0} {$i<$maxit} {incr i} {
+        set indent [expr 2*($indlvl)]
+        set remwidth [expr $linewidth-$indent]
+        set fmtstr "%${indent}.${indent}s%-${remwidth}.${remwidth}s"
+
+        vmdcon -info [ format $fmtstr $parstr "iteration $i:" ]
+        report_overlap $molid $base_sel $move_sel $indlvl $linewidth
+
+        set cur_overlapping [ overlap $molid $base_sel $move_sel ]
+
+        # check whether position is alright:
+        # we allow overlap with dispensable_compounds, which are supposed
+        # to be removec subsequently removed, but not with anything else
+        # within immobile_compounds and mobile_compounds, i.e. other
+        # surfactant chains, counterions or substrate.
+        if { [ $cur_overlapping num ] == 0} {
+            vmdcon -info [ format $fmtstr $indstr "found suitable location  in iteration $i." ]
+            return 1
+        }
+
+        set random_3vec [ list [ expr rand() ] [ expr rand() ] [ expr rand() ] ]
+        vmdcon -info [ format $fmtstr $indstr [ format "random 3-vector: %26s" \
+            [ format "%8.4f %8.4f %8.4f" {*}$random_3vec ] ] ]
+
+        set random_position [ vecadd $position_origin [ \
+            vecmul $random_3vec $position_offset] ]
+        vmdcon -info [ format $fmtstr $indstr [ format "random position: %26s" \
+            [ format "%8.4f %8.4f %8.4f" {*}$random_position ] ] ]
+
+        set cur_position [measure center $move_sel]
+        vmdcon -info [ format $fmtstr $indstr [ format "current position: %26s" \
+            [ format "%8.4f %8.4f %8.4f" {*}$cur_position ] ] ]
+
+        set cur_offset [vecsub $random_position $cur_position]
+        vmdcon -info [ format $fmtstr $indstr [ format "move by: %26s" \
+            [ format "%8.4f %8.4f %8.4f" {*}$cur_offset ] ] ]
+
+        $move_sel moveby $cur_offset
+        unset cur_overlapping
+    }
+    incr indlvl -1
+    return 0
 }
 
 proc ::MergeTools::remove { molid base_sel remove_sel } {
