@@ -511,6 +511,15 @@ proc ::MergeTools::mrg { args } {
             set key [lindex $newargs 0]
             set newargs [lrange $newargs 1 end]
             switch -nocase -- $key {
+                dispensable {
+                    set retval [overlap_dispensable $molid $sel [lindex $newargs 0]]
+                }
+                forbidden {
+                    set retval [overlap_forbidden $molid $sel [lindex $newargs 0]]
+                }
+                mobile {
+                    set retval [overlap_mobile $molid $sel [lindex $newargs 0]]
+                }
                 twoway -
                 bi -
                 bidirectional {
@@ -667,9 +676,58 @@ proc ::MergeTools::overlap { molid base_sel ext_sel {ex "ex"} } {
     return $overlap
 }
 
+proc ::MergeTools::overlap_mobile { molid base_sel ext_sel {ex "ex"} } {
+    # select union of mobile compounds in ext_sel that overlap with forbidden
+    # compounds in base_sel and mobile compounds in base_sel that overlap with
+    # forbidden compounds in ext_sel
+    variable overlap_distance
+    variable compname
+
+    set mobile_compounds [ mrg -sel $base_sel get mobile ]
+    set forbidden_compounds [ mrg -sel $base_sel get forbidden ]
+
+    set base_forbidden [ atomselect $molid "([$base_sel text]) and ($compname $forbidden_compounds)" ]
+    set ext_forbidden [ atomselect $molid "([$ext_sel text]) and ($compname $forbidden_compounds)" ]
+    set base_mobile [ atomselect $molid "([$base_sel text]) and ($compname $mobile_compounds)" ]
+    set ext_mobile [ atomselect $molid "([$ext_sel text]) and ($compname $mobile_compounds)" ]
+
+    # backward overlap: from ext into base
+    set backward_overlap [ overlap $molid $base_forbidden $ext_mobile ]
+    # forward overlap: from base into ext
+    set forward_overlap [ overlap $molid $ext_forbidden $base_mobile ]
+
+    set overlap [ atomselect $molid "([ $backward_overlap text ]) or ([ $forward_overlap text ])" ]
+
+    $overlap global
+    return $overlap
+}
+
+proc ::MergeTools::overlap_forbidden { molid base_sel ext_sel {ex "ex"} } {
+    # select union of any compound in ext_sel that overlap with forbidden
+    # compounds in base_sel and any compound in base_sel that overlap with
+    # forbidden compounds in ext_sel
+    variable overlap_distance
+    variable compname
+
+    set forbidden_compounds [ mrg -sel $base_sel get forbidden ]
+
+    set base_forbidden [ atomselect $molid "([$base_sel text]) and ($compname $forbidden_compounds)" ]
+    set ext_forbidden [ atomselect $molid "([$ext_sel text]) and ($compname $forbidden_compounds)" ]
+
+    # backward overlap: from ext into base
+    set backward_overlap [ overlap $molid $base_forbidden $ext_sel ]
+    # forward overlap: from base into ext
+    set forward_overlap [ overlap $molid $ext_forbidden $base_sel ]
+
+    set overlap [ atomselect $molid "([ $backward_overlap text ]) or ([ $forward_overlap text ])" ]
+
+    $overlap global
+    return $overlap
+}
+
 proc ::MergeTools::overlap_bidirectional { molid base_sel ext_sel {ex "ex"} } {
     # select union of compounds in ext_sel that overlap with compounds in
-    # base_sel and compunds in base_sel that overlap with compounds in ext_sel
+    # base_sel and compounds in base_sel that overlap with compounds in ext_sel
     variable overlap_distance
     variable compound
 
