@@ -108,11 +108,26 @@ proc ::MergeTools::usage {} {
     vmdcon -info "sample usage:"
     vmdcon -info ""
     vmdcon -info "  vmd> package require mergetool"
-    vmdcon -info "  vmd> set base_id \[mol new base.gro waitfor all\]"
-    vmdcon -info "  vmd> set ext_id \[mol new ext.gro waitfor all\]"
-    vmdcon -info "  vmd> set base \[atomselect \$base_id all\]"
-    vmdcon -info "  vmd> set dry_ext \[atomselect \"\$ext_id 'not resname SOL\"\]"
-    vmdcon -info "  vmd> merge \$base \$dry_ext"
+    vmdcon -info "  vmd>"
+    vmdcon -info "  vmd> set substrate_system_id \[mol new substrate.gro\]"
+    vmdcon -info "  vmd> set indenter_system_id \[mol new indenter.gro\]"
+    vmdcon -info "  vmd> set substrate_system \[atomselect \$substrate_system_id all\]"
+    vmdcon -info "  vmd> set indenter_system \[atomselect \$indenter_system_id all\]"
+    vmdcon -info "  vmd>"
+    vmdcon -info "  vmd> mrg set autowrap residue autojoin off"
+    vmdcon -info "  vmd> mrg set dispensable SOL"
+    vmdcon -info "  vmd> mrg set immobile AUM"
+    vmdcon -info "  vmd>"
+    vmdcon -info "  vmd> set merged_id \[mrg -sel \$substrate_system merge \$indenter_system\]"
+    vmdcon -info "  vmd> set base \[mrg get base\]"
+    vmdcon -info "  vmd> set ext \[mrg get ext\]"
+    vmdcon -info "  vmd> set merged \[atomselect \$merged_id all\]"
+    vmdcon -info "  vmd>"
+    vmdcon -info "  vmd> set overlap_to_move \[mrg -sel \$base overlap mobile \$ext]"
+    vmdcon -info "  vmd> mrg -sel \$merged move \$overlap_to_move"
+    vmdcon -info "  vmd>"
+    vmdcon -info "  vmd> set overlap_to_remove \[mrg -sel \$base overlap removable \$ext]"
+    vmdcon -info "  vmd> set nonoverlap_id \[mrg -sel \$merged remove \$overlap_to_remove\]"
     vmdcon -info ""
     vmdcon -info "will use parameters for SDS, merge an interfacial system's 'interface.lammps'"
     vmdcon -info "data file with an indenter's 'indenter.pdb', remove any overlap and write"
@@ -300,11 +315,13 @@ proc ::MergeTools::mrg { args } {
                 base {
                     variable base
                     set retval $base
+                    $retval uplevel 1
                 }
 
                 ext {
                     variable ext
                     set retval $ext
+                    $retval uplevel 1
                 }
 
                 dispensable {
@@ -460,7 +477,7 @@ proc ::MergeTools::mrg { args } {
                             set newargs [lrange $newargs 1 end]
                         } else {
                             # otherwise just set explicitly, but check for valid entries
-                            set valid_vals [ compounds $molid $sel ]
+                            set valid_vals [ compnames $molid $sel ]
                             foreach val $newargs {
                                 if {$val ni $valid_vals} {
                                     variable compound
@@ -512,6 +529,9 @@ proc ::MergeTools::mrg { args } {
             set key [lindex $newargs 0]
             set newargs [lrange $newargs 1 end]
             switch -nocase -- $key {
+                removable {
+                    set retval [overlap_removable $molid $sel [lindex $newargs 0]]
+                }
                 dispensable {
                     set retval [overlap_dispensable $molid $sel [lindex $newargs 0]]
                 }
@@ -538,6 +558,8 @@ proc ::MergeTools::mrg { args } {
                     set retval [overlap $molid $sel $key]
                 }
             }
+            # we have to manualy elevate atomelect procs
+            $retval uplevel 1
         }
         "move" {
             set retval [move $molid $sel [lindex $newargs 0]]
@@ -625,9 +647,13 @@ proc ::MergeTools::merge { molid base_sel ext_sel } {
     # TODO: separate validation
     # set base_sel [validate_atomselect $molid $base_sel]
 
+    # $base_sel global
+    # $ext_sel global
+    # vmd -info "#1"
     set merged_id [::TopoTools::selections2mol "$base_sel $ext_sel"]
     set base_id [$base_sel molid]
     set ext_id [$ext_sel molid]
+    # vmd -info "#2"
 
     vmdcon -info "  Merged extension 'atomselect $ext_id \"[$ext_sel text]\"' into base 'atomselect \"$base_id [$base_sel text]\"' under molid $merged_id."
 
@@ -663,9 +689,7 @@ proc ::MergeTools::merge { molid base_sel ext_sel } {
         pbc join {*}[split $autojoin " "] -molid $merged_id -sel [$merged text] -bondlist -all -verbose
     }
 
-    # mol off $base_id
-    # mol off $ext_id
-    mol rename $merged_id merged
+    $merged delete
     return $merged_id
 }
 
@@ -678,12 +702,62 @@ proc ::MergeTools::overlap { molid base_sel ext_sel {ex "ex"} } {
     set base_sel [ validate_atomselect $molid $base_sel ]
     set ext_sel [ validate_atomselect $molid $ext_sel ]
 
-    set overlap [atomselect $molid \
-        "([$ext_sel text]) and (same $compound as (${ex}within $overlap_distance of [$base_sel text]))"]
+    set overlap [ atomselect $molid \
+        "([$ext_sel text]) and (same $compound as (${ex}within $overlap_distance of [$base_sel text]))" ]
 
-    $overlap global
+    # TODO: nasty legacy behavior in VMD, see https://www.ks.uiuc.edu/Research/vmd/mailing_list/vmd-l/21856.html
+    # $overlap global won't work for the caller, thus upproc 1 necessary. Replace elsewhere.
+    # $overlap global
+    # upproc 1 $overlap
+
+    # remove a current tie, if it exists
+    # uplevel 1 [list trace vdelete upproc_var_$overlap u upproc_del]
+    # # ignore if not a number, else raise the level, since I'm in a proc
+    # # if {! [catch {expr $level}]} {incr level}
+    # # make the local variable (I never use the actual definition)
+    # uplevel 1 [list set upproc_var_$overlap 1]
+    # # set the trace
+    # uplevel 1 [list trace variable upproc_var_$overlap u upproc_del]
+    #
+    # #$overlap global
+    $overlap uplevel 1
+    # vmdcon -info "overlap sel: [$overlap text]"
     return $overlap
 }
+
+
+proc ::MergeTools::overlap_removable { molid base_sel ext_sel {ex "ex"} } {
+    # finds dispensable overlap whose removal will render all remaining
+    # dispensable compounds in the system non-overlapping
+    # strategy as follows: first find all dispensable compounds in ext that
+    # overlap with any compound in base and mark them for removal; next, find
+    # all dispensable compounds in base that overlap with any compound in ext
+    # not marked for removal; return union of both
+    variable compound
+    variable compname
+
+    set dispensable_compounds [ mrg -sel $base_sel get dispensable ]
+
+    set ext_dispensable [atomselect $molid "$compname $dispensable_compounds and ([$ext_sel text])"]
+    set base_dispensable [atomselect $molid "$compname $dispensable_compounds and ([$base_sel text])"]
+
+    set ext_to_remove [overlap $molid $base_sel $ext_dispensable]
+    set ext_to_keep [atomselect $molid "([$ext_sel text]) and not ([$ext_to_remove text])"]
+
+    set base_to_remove [overlap $molid $ext_to_keep $base_dispensable]
+
+    set overlap [atomselect $molid "([$base_to_remove text]) or ([$ext_to_remove text])"]
+
+    $ext_dispensable delete
+    $base_dispensable delete
+    $ext_to_remove delete
+    $ext_to_keep delete
+    $base_to_remove delete
+
+    $overlap uplevel 1
+    return $overlap
+}
+
 
 proc ::MergeTools::overlap_mobile { molid base_sel ext_sel {ex "ex"} } {
     # select union of mobile compounds in ext_sel that overlap with forbidden
@@ -710,9 +784,18 @@ proc ::MergeTools::overlap_mobile { molid base_sel ext_sel {ex "ex"} } {
 
     set overlap [ atomselect $molid "([ $backward_overlap text ]) or ([ $forward_overlap text ])" ]
 
-    $overlap global
+    $base_forbidden delete
+    $ext_forbidden delete
+    $base_mobile delete
+    $ext_mobile delete
+
+    $backward_overlap delete
+    $forward_overlap delete
+
+    $overlap uplevel 1
     return $overlap
 }
+
 
 proc ::MergeTools::overlap_forbidden { molid base_sel ext_sel {ex "ex"} } {
     # select union of any compound in ext_sel that overlap with forbidden
@@ -736,7 +819,11 @@ proc ::MergeTools::overlap_forbidden { molid base_sel ext_sel {ex "ex"} } {
 
     set overlap [ atomselect $molid "([ $backward_overlap text ]) or ([ $forward_overlap text ])" ]
 
-    $overlap global
+    $base_forbidden delete
+    $ext_forbidden delete
+    $forward_overlap delete
+    $backward_overlap delete
+    $overlap uplevel 1
     return $overlap
 }
 
@@ -763,7 +850,9 @@ proc ::MergeTools::overlap_dispensable { molid base_sel ext_sel {ex "ex"} } {
 
     set overlap [ atomselect $molid "([ $backward_overlap text ]) or ([ $forward_overlap text ])" ]
 
-    $overlap global
+    $forward_overlap delete
+    $backward_overlap delete
+    $overlap uplevel 1
     return $overlap
 }
 
@@ -780,9 +869,12 @@ proc ::MergeTools::overlap_bidirectional { molid base_sel ext_sel {ex "ex"} } {
 
     set overlap [ atomselect $molid "([ $backward_overlap text ]) or ([ $forward_overlap text ])" ]
 
-    $overlap global
+    $forward_overlap delete
+    $backward_overlap delete
+    $overlap uplevel 1
     return $overlap
 }
+
 
 proc ::MergeTools::overlap_internal { molid base_sel {indlvl 0} {linewidth 180} } {
     # finds a subselection whose removal will render base_sel overlap-free
@@ -818,8 +910,8 @@ proc ::MergeTools::overlap_internal { molid base_sel {indlvl 0} {linewidth 180} 
             }
         } else {
             if { [llength $unique_overlap_compound_ids] > 0 } {
-                set overlap_sel_txt "([$base_sel text]) and $compname $unique_overlap_compound_ids"
-                set nonoverlap_sel_txt "([$base_sel text]) and not $compname $unique_overlap_compound_ids"
+                set overlap_sel_txt "$compname $unique_overlap_compound_ids and ([$base_sel text])"
+                set nonoverlap_sel_txt "not $compname $unique_overlap_compound_ids and ([$base_sel text])"
             } else {
                 set overlap_sel_txt "none"
                 set nonoverlap_sel_txt "([$base_sel text])"
@@ -833,14 +925,15 @@ proc ::MergeTools::overlap_internal { molid base_sel {indlvl 0} {linewidth 180} 
         set tot_count [llength $unique_compound_ids]
         set count 0
         incr indlvl
-        vmdcon -info [format "%${indent}.${indent}s" $indstr]
+        vmdcon -nonewline -info [format "%${indent}.${indent}s#iter $niter progress:" $indstr]
+        flush stdout
         foreach compid $unique_compound_ids {
             if {[$nonoverlap_sel text] eq "all"} {
                 set cur_sel_txt "$compname $compid"
                 set cur_neg_sel_txt "not $compname $compid"
             } else {
-                set cur_sel_txt "([$base_sel text]) and $compname $compid"
-                set cur_neg_sel_txt "([$nonoverlap_sel text]) and not $compname $compid"
+                set cur_sel_txt "$compname $compid and ([$base_sel text])"
+                set cur_neg_sel_txt "not $compname $compid and ([$nonoverlap_sel text])"
             }
 
             set cur_sel [ atomselect $molid "$cur_sel_txt" ]
@@ -856,26 +949,36 @@ proc ::MergeTools::overlap_internal { molid base_sel {indlvl 0} {linewidth 180} 
                 set max_penalty $cur_penalty
             }
 
-            if {[expr $count % ($tot_count / $linewidth)] == 0} {
-                puts -nonewline "."
-            }
+            $cur_sel delete
+            $cur_neg_sel delete
+            $cur_overlap delete
+
+            puts -nonewline "."
+            flush stdout
+            # if {[expr $count % ($tot_count / $linewidth)] == 0} {
+            #     puts -nonewline "."
+            #     flush stdout
+            # }
             incr count
         }
         incr indlvl -1
+        puts ""
 
         if { $worst_compid == -1 } {
             vmdcon -info [ format $fmtstr $indstr "Iteration $iter: remaining selection overlap-free." ]
-            break
+            $overlap_sel delete
         } else {
             set worst_compnameval [ lsort -unique [$worst_sel get $compname] ]
             vmdcon -info [ format $fmtstr $indtsr "Iteration $niter: identified worst overlap of $worst_penalty at $compname $worst_compnameval $compound $worst_compid." ]
             lappend unique_overlap_compound_ids $worst_compid
+            $overlap_sel delete
+            $nonoverlap_sel delete
         }
         incr niter
     }
     incr indlvl -1
 
-    $overlap_sel global
+    $overlap_sel uplevel 1
     return $overlap_sel
 }
 
@@ -885,17 +988,17 @@ proc ::MergeTools::report_compounds { molid base_sel {indlvl 0} {linewidth 180} 
     variable compname
     variable skip_zero
 
-    set base_sel [validate_atomselect $molid $base_sel]
+    set loc_base_sel [validate_atomselect $molid $base_sel]
 
-    set immobile_compounds [ mrg -sel $base_sel get immobile ]
-    set mobile_compounds [ mrg -sel $base_sel get mobile ]
-    set dispensable_compounds [ mrg -sel $base_sel get dispensable ]
-    set forbidden_compounds [ mrg -sel $base_sel get forbidden ]
+    set immobile_compounds [ mrg -sel $loc_base_sel get immobile ]
+    set mobile_compounds [ mrg -sel $loc_base_sel get mobile ]
+    set dispensable_compounds [ mrg -sel $loc_base_sel get dispensable ]
+    set forbidden_compounds [ mrg -sel $loc_base_sel get forbidden ]
 
     set complabels {"mobile" "immobile" "dispensable" "forbidden"}
     set complists [ list $mobile_compounds $immobile_compounds $dispensable_compounds $forbidden_compounds ]
 
-    set title [ format "compound report (molid: %d, sel: '%s')" $molid [ $base_sel text ] ]
+    set title [ format "compound report (molid: %d, sel: '%s')" $molid [ $loc_base_sel text ] ]
     set bar [ string repeat "=" [string length $title] ]
 
     set parstr "- "
@@ -916,11 +1019,11 @@ proc ::MergeTools::report_compounds { molid base_sel {indlvl 0} {linewidth 180} 
     set remwidth [expr $linewidth-$indent]
     set fmtstr "%${indent}.${indent}s%-${remwidth}.${remwidth}s"
 
-    vmdcon -info [format $fmtstr $parstr "#atoms ('[ $base_sel text ]'):"] \
-        [ format "%12d" [ $base_sel num ] ]
+    vmdcon -info [format $fmtstr $parstr "#atoms ('[ $loc_base_sel text ]'):"] \
+        [ format "%12d" [ $loc_base_sel num ] ]
 
-    set unique_compounds [ lsort -unique -integer [ $base_sel get $compound ] ]
-    vmdcon -info [format $fmtstr $indstr "#${compound}s ('[ $base_sel text ]'):"] \
+    set unique_compounds [ lsort -unique -integer [ $loc_base_sel get $compound ] ]
+    vmdcon -info [format $fmtstr $indstr "#${compound}s ('[ $loc_base_sel text ]'):"] \
         [ format "%12d" [ llength $unique_compounds ] ]
 
     incr indlvl
@@ -933,10 +1036,10 @@ proc ::MergeTools::report_compounds { molid base_sel {indlvl 0} {linewidth 180} 
             continue
         }
 
-        if {[$base_sel text] eq "all"} {
+        if {[$loc_base_sel text] eq "all"} {
             set cur_sel_txt "$compname $complist"
         } else {
-            set cur_sel_txt "[$base_sel text] and $compname $complist"
+            set cur_sel_txt "[$loc_base_sel text] and $compname $complist"
         }
 
         set cur_sel [atomselect $molid "$cur_sel_txt"]
@@ -949,6 +1052,7 @@ proc ::MergeTools::report_compounds { molid base_sel {indlvl 0} {linewidth 180} 
             [ format "%12d" [ $cur_sel num ] ]
         vmdcon -info [format $fmtstr $indstr "#${compound}s in $complabel $compname {$complist} ('[ $cur_sel text ]'):"] \
             [ format "%12d" [ llength $unique_compounds ] ]
+        $cur_sel delete
 
         incr indlvl
         foreach bc $complist {
@@ -956,7 +1060,7 @@ proc ::MergeTools::report_compounds { molid base_sel {indlvl 0} {linewidth 180} 
             set remwidth [expr $linewidth-$indent]
             set fmtstr "%${indent}.${indent}s%-${remwidth}.${remwidth}s"
 
-            set cur_sel_txt "[$base_sel text] and $compname $bc"
+            set cur_sel_txt "[$loc_base_sel text] and $compname $bc"
             set cur_sel [atomselect $molid "$cur_sel_txt"]
             if { $skip_zero && [$cur_sel num] == 0 } {
                 continue
@@ -968,13 +1072,14 @@ proc ::MergeTools::report_compounds { molid base_sel {indlvl 0} {linewidth 180} 
             vmdcon -info [format $fmtstr $indstr "#${compound}s in $complabel $compname '$bc' ('[ $cur_sel text ]'):"] \
                 [format "%12d" [ llength $unique_compounds ] ]
 
-            unset cur_sel_txt
-            unset cur_sel
+
+            $cur_sel delete
         }
         incr indlvl -1
     }
     incr indlvl -1
 }
+
 
 proc ::MergeTools::report_overlap { molid base_sel ext_sel {indlvl 0} {linewidth 180} } {
     # report compounds in ext_sel that overlap with compounds in base_sel
@@ -1120,24 +1225,24 @@ proc ::MergeTools::report_overlap { molid base_sel ext_sel {indlvl 0} {linewidth
                     vmdcon -info [ format $fmtstr $indstr "#${compound}s in $ext_complabel $compname '$ec' overlapping $base_complabel $compname '$bc':" ] \
                         [ format "%12d" [ llength $uecobc ] ]
 
-                    unset ecobc
-                    unset uecobc
+                    $ecobc delete
+                    $uecobc delete
                 }
                 incr indlvl -1
-                unset ecobl
-                unset uecobl
+                $ecobl delete
+                $uecobl delete
             }
             incr indlvl -1
-            unset ecob
-            unset uecob
+            $ecob delete
+            $uecob delete
         }
         incr indlvl -1
-        unset elob
-        unset uelob
+        $elob delete
+        $uelob delete
     }
     incr indlvl -1
-    unset eob
-    unset ueob
+    $eob delete
+    $ueob delete
 }
 
 
@@ -1207,13 +1312,10 @@ proc ::MergeTools::move { molid base_sel overlap_sel { position_limits "" } {ind
 
         set overlap_compname_sel [atomselect $molid "[$overlap_sel text] and $compname $compnameval" ]
 
-        vmdcon -info ""
-        vmdcon -info [ format $fmtstr $indstr "overlap ${compound}s of $compname $compnameval" ]
-        vmdcon -info ""
-        report_compounds $molid $overlap_compname_sel $indlvl
-
-
-        # report_overlap $molid $base_forbidden_sel $overlap_compname_sel $indlvl
+        # vmdcon -info ""
+        # vmdcon -info [ format $fmtstr $indstr "overlap ${compound}s of $compname $compnameval" ]
+        # vmdcon -info ""
+        # report_compounds $molid $overlap_compname_sel $indlvl
 
         set unique_overlap_compound_ids [ lsort -unique -integer [ $overlap_compname_sel get $compound ] ]
 
@@ -1228,10 +1330,10 @@ proc ::MergeTools::move { molid base_sel overlap_sel { position_limits "" } {ind
             set cur_move_sel [ atomselect $molid "$compound $compid" ]
             set cur_forbidden_sel [ atomselect $molid "[$base_forbidden_sel text] and not $compound $compid" ]
 
-            vmdcon -info ""
-            vmdcon -info [ format $fmtstr $indstr "forbidden ${compound}s without current $compound $compid" ]
-            vmdcon -info ""
-            report_compounds $molid $cur_forbidden_sel $indlvl
+            # vmdcon -info ""
+            # vmdcon -info [ format $fmtstr $indstr "forbidden ${compound}s without current $compound $compid" ]
+            # vmdcon -info ""
+            # report_compounds $molid $cur_forbidden_sel $indlvl
 
             if { [ $cur_move_sel num ] == 0 } {
                 vmdcon -error [ format $fmtstr $indstr "selection empty, already removed!" ]
@@ -1240,13 +1342,13 @@ proc ::MergeTools::move { molid base_sel overlap_sel { position_limits "" } {ind
 
             set ret [ move_one $molid $cur_forbidden_sel $cur_move_sel $position_origin $position_offset $indlvl $linewidth]
             if { $ret } { incr nmoved } else { incr nfailed }
-            unset cur_move_sel
-            unset cur_forbidden_sel
+
+            $cur_move_sel delete
+            $cur_forbidden_sel delete
         }
         incr indlvl -1
 
-        unset overlap_compname_sel
-        unset unique_overlap_compound_ids
+        $overlap_compname_sel delete
     }
     incr indlvl -1
     if { $nfailed > 0 } {
@@ -1271,7 +1373,7 @@ proc ::MergeTools::move_one { molid base_sel move_sel position_origin position_o
         set fmtstr "%${indent}.${indent}s%-${remwidth}.${remwidth}s"
 
         vmdcon -info [ format $fmtstr $parstr "iteration $i:" ]
-        report_overlap $molid $base_sel $move_sel $indlvl $linewidth
+        # report_overlap $molid $base_sel $move_sel $indlvl $linewidth
 
         set cur_overlapping [ overlap $molid $base_sel $move_sel ]
 
@@ -1282,6 +1384,7 @@ proc ::MergeTools::move_one { molid base_sel move_sel position_origin position_o
         # surfactant chains, counterions or substrate.
         if { [ $cur_overlapping num ] == 0} {
             vmdcon -info [ format $fmtstr $indstr "found suitable location  in iteration $i." ]
+            $cur_overlapping delete
             return 1
         }
 
@@ -1303,7 +1406,8 @@ proc ::MergeTools::move_one { molid base_sel move_sel position_origin position_o
             [ format "%8.4f %8.4f %8.4f" {*}$cur_offset ] ] ]
 
         $move_sel moveby $cur_offset
-        unset cur_overlapping
+
+        $cur_overlapping delete
     }
     incr indlvl -1
     return 0
@@ -1316,28 +1420,17 @@ proc ::MergeTools::remove { molid base_sel remove_sel } {
     set remove_sel [ validate_atomselect $molid $remove_sel ]
     # TODO: check for same molid
 
-    set keep_sel $molid "[$base_sel text] and not [$remove_sel text]"
+    set keep_sel [atomselect $molid "[$base_sel text] and not [$remove_sel text]"]
     variable keep_id [::TopoTools::selections2mol $keep_sel]
 
     # copy periodic box
     molinfo $keep_id set {a b c alpha beta gamma} \
         [molinfo $molid get {a b c alpha beta gamma}]a
 
-    return keep_id
+    $keep_sel delete
+    return $keep_id
 }
 
-# proc ::MergeTools::remove { molid remove_sel } {
-#     # delete all atoms within remove_sel
-#     set remove_sel [ validate_atomselect $molid $remove_sel ]
-#
-#     set seglist [$remove_sel get segid]
-#     set reslist [$remove_sel get resid]
-#
-#     # copy periodic box
-#
-#     molinfo $keep_id set {a b c alpha beta gamma} \
-#         [molinfo $molid get {a b c alpha beta gamma}]a
-# }
 
 interp alias {} mrg {} ::MergeTools::mrg
 package provide mergetools $::MergeTools::version
