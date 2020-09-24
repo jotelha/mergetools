@@ -215,11 +215,12 @@ proc ::MergeTools::mrg { args } {
       "merge"
       "overlap"
       "move"
+      "remove"
       "get"
       "set"
       "report"
-      "wrap" "join"
-      "help" "info" }
+      "help"
+    }
 
       # valid properties.
       set validprop {
@@ -482,8 +483,8 @@ proc ::MergeTools::mrg { args } {
                             variable forbidden_compounds -1
                             set newargs [lrange $newargs 1 end]
                         } else {
-                            # otherwise just jet explicitly, but check for valid entries
-                            set valid_vals [ compounds $molid $sel ]
+                            # otherwise just set explicitly, but check for valid entries
+                            set valid_vals [ compnames $molid $sel ]
                             foreach val $newargs {
                                 if {$val ni $valid_vals} {
                                     variable compound
@@ -530,6 +531,9 @@ proc ::MergeTools::mrg { args } {
                 unidirectional {
                     set retval [overlap $molid $sel [lindex $newargs 0]]
                 }
+                internal {
+                    set retval [overlap_internal $molid $sel]
+                }
                 default {
                     set retval [overlap $molid $sel $key]
                 }
@@ -537,6 +541,9 @@ proc ::MergeTools::mrg { args } {
         }
         "move" {
             set retval [move $molid $sel [lindex $newargs 0]]
+        }
+        "remove" {
+            set retval [remove $molid $sel [lindex $newargs 0]]
         }
         "report" {
             set key [lindex $newargs 0]
@@ -567,11 +574,13 @@ proc ::MergeTools::mrg { args } {
     return $retval
 }
 
+
 proc ::MergeTools::compnames { molid sel } {
     variable compname
     set sel [ validate_atomselect $molid $sel ]
     set retval [ lsort -unique [ $sel get $compname ] ]
 }
+
 
 proc ::MergeTools::validate_atomselect { molid val } {
     set seltxt all
@@ -683,6 +692,9 @@ proc ::MergeTools::overlap_mobile { molid base_sel ext_sel {ex "ex"} } {
     variable overlap_distance
     variable compname
 
+    set base_sel [ validate_atomselect $molid $base_sel ]
+    set ext_sel [ validate_atomselect $molid $ext_sel ]
+
     set mobile_compounds [ mrg -sel $base_sel get mobile ]
     set forbidden_compounds [ mrg -sel $base_sel get forbidden ]
 
@@ -709,6 +721,9 @@ proc ::MergeTools::overlap_forbidden { molid base_sel ext_sel {ex "ex"} } {
     variable overlap_distance
     variable compname
 
+    set base_sel [ validate_atomselect $molid $base_sel ]
+    set ext_sel [ validate_atomselect $molid $ext_sel ]
+
     set forbidden_compounds [ mrg -sel $base_sel get forbidden ]
 
     set base_forbidden [ atomselect $molid "([$base_sel text]) and ($compname $forbidden_compounds)" ]
@@ -718,6 +733,33 @@ proc ::MergeTools::overlap_forbidden { molid base_sel ext_sel {ex "ex"} } {
     set backward_overlap [ overlap $molid $base_forbidden $ext_sel ]
     # forward overlap: from base into ext
     set forward_overlap [ overlap $molid $ext_forbidden $base_sel ]
+
+    set overlap [ atomselect $molid "([ $backward_overlap text ]) or ([ $forward_overlap text ])" ]
+
+    $overlap global
+    return $overlap
+}
+
+
+proc ::MergeTools::overlap_dispensable { molid base_sel ext_sel {ex "ex"} } {
+    # select union of dispensable compound in ext_sel that overlap with any
+    # compounds in base_sel and dispensable compound in base_sel that overlap
+    # with any compounds in ext_sel
+    variable overlap_distance
+    variable compname
+
+    set base_sel [ validate_atomselect $molid $base_sel ]
+    set ext_sel [ validate_atomselect $molid $ext_sel ]
+
+    set dispensable_compounds [ mrg -sel $base_sel get dispensable ]
+
+    set base_dispensable [ atomselect $molid "([$base_sel text]) and ($compname $dispensable_compounds)" ]
+    set ext_dispensable [ atomselect $molid "([$ext_sel text]) and ($compname $dispensable_compounds)" ]
+
+    # backward overlap: from ext into base
+    set backward_overlap [ overlap $molid $base_sel $ext_dispensable ]
+    # forward overlap: from base into ext
+    set forward_overlap [ overlap $molid $ext_sel $base_dispensable ]
 
     set overlap [ atomselect $molid "([ $backward_overlap text ]) or ([ $forward_overlap text ])" ]
 
@@ -741,6 +783,102 @@ proc ::MergeTools::overlap_bidirectional { molid base_sel ext_sel {ex "ex"} } {
     $overlap global
     return $overlap
 }
+
+proc ::MergeTools::overlap_internal { molid base_sel {indlvl 0} {linewidth 180} } {
+    # finds a subselection whose removal will render base_sel overlap-free
+    variable compound
+    variable compname
+
+    set base_sel [ validate_atomselect $molid $base_sel ]
+
+    set parstr "- "
+    set indstr " "
+
+    set indent [expr 2*($indlvl)]
+    set remwidth [expr $linewidth-$indent]
+    set fmtstr "%${indent}.${indent}s%-${remwidth}.${remwidth}s"
+
+    incr indlvl
+    set max_penalty 0
+    set worst_compid -1
+
+    set unique_overlap_compound_ids {}
+    set niter 0
+    incr indlvl
+    while 1 {
+        set worst_compid -1
+        # find compound with worst overlap
+        if {[$base_sel text] eq "all"} {
+            if { [llength $unique_overlap_compound_ids] > 0 } {
+                set overlap_sel_txt "$compname $unique_overlap_compound_ids"
+                set nonoverlap_sel_txt "not $compname $unique_overlap_compound_ids"
+            } else {
+                set overlap_sel_txt "none"
+                set nonoverlap_sel_txt "all"
+            }
+        } else {
+            if { [llength $unique_overlap_compound_ids] > 0 } {
+                set overlap_sel_txt "([$base_sel text]) and $compname $unique_overlap_compound_ids"
+                set nonoverlap_sel_txt "([$base_sel text]) and not $compname $unique_overlap_compound_ids"
+            } else {
+                set overlap_sel_txt "none"
+                set nonoverlap_sel_txt "([$base_sel text])"
+            }
+        }
+
+        set overlap_sel [ atomselect $molid "$overlap_sel_txt" ]
+        set nonoverlap_sel [ atomselect $molid "$nonoverlap_sel_txt" ]
+
+        set unique_compound_ids [ lsort -unique -integer [ $nonoverlap_sel get $compound ] ]
+        set tot_count [llength $unique_compound_ids]
+        set count 0
+        incr indlvl
+        vmdcon -info [format "%${indent}.${indent}s" $indstr]
+        foreach compid $unique_compound_ids {
+            if {[$nonoverlap_sel text] eq "all"} {
+                set cur_sel_txt "$compname $compid"
+                set cur_neg_sel_txt "not $compname $compid"
+            } else {
+                set cur_sel_txt "([$base_sel text]) and $compname $compid"
+                set cur_neg_sel_txt "([$nonoverlap_sel text]) and not $compname $compid"
+            }
+
+            set cur_sel [ atomselect $molid "$cur_sel_txt" ]
+            set cur_neg_sel [ atomselect $molid "$cur_neg_sel_txt" ]
+
+            set cur_overlap [ overlap $molid $cur_sel $cur_neg_sel ]
+
+            set unique_cur_overlap_compound_ids [ lsort -unique -integer [ $cur_overlap get $compound ] ]
+            set cur_penalty [llength $unique_cur_overlap_compound_ids]
+            if { $cur_penalty > $max_penalty } {
+                set worst_compid $compid
+                set worst_sel $cur_sel
+                set max_penalty $cur_penalty
+            }
+
+            if {[expr $count % ($tot_count / $linewidth)] == 0} {
+                puts -nonewline "."
+            }
+            incr count
+        }
+        incr indlvl -1
+
+        if { $worst_compid == -1 } {
+            vmdcon -info [ format $fmtstr $indstr "Iteration $iter: remaining selection overlap-free." ]
+            break
+        } else {
+            set worst_compnameval [ lsort -unique [$worst_sel get $compname] ]
+            vmdcon -info [ format $fmtstr $indtsr "Iteration $niter: identified worst overlap of $worst_penalty at $compname $worst_compnameval $compound $worst_compid." ]
+            lappend unique_overlap_compound_ids $worst_compid
+        }
+        incr niter
+    }
+    incr indlvl -1
+
+    $overlap_sel global
+    return $overlap_sel
+}
+
 
 proc ::MergeTools::report_compounds { molid base_sel {indlvl 0} {linewidth 180} } {
     variable compound
@@ -1117,6 +1255,7 @@ proc ::MergeTools::move { molid base_sel overlap_sel { position_limits "" } {ind
     vmdcon -info [ format $fmtstr $indstr [ format "successfully moved %3d ${compound}s." $nmoved ] ]
 }
 
+
 proc ::MergeTools::move_one { molid base_sel move_sel position_origin position_offset {indlvl 0} {linewidth 180} } {
     # move move_sel until it has no overlap with base_sel anymore
     variable maxit
@@ -1138,7 +1277,7 @@ proc ::MergeTools::move_one { molid base_sel move_sel position_origin position_o
 
         # check whether position is alright:
         # we allow overlap with dispensable_compounds, which are supposed
-        # to be removec subsequently removed, but not with anything else
+        # to be subsequently removed, but not with anything else
         # within immobile_compounds and mobile_compounds, i.e. other
         # surfactant chains, counterions or substrate.
         if { [ $cur_overlapping num ] == 0} {
@@ -1170,6 +1309,7 @@ proc ::MergeTools::move_one { molid base_sel move_sel position_origin position_o
     return 0
 }
 
+
 proc ::MergeTools::remove { molid base_sel remove_sel } {
     # creates new molecule from base_sel, with remove_sel removed
     set base_sel [ validate_atomselect $molid $base_sel ]
@@ -1182,7 +1322,22 @@ proc ::MergeTools::remove { molid base_sel remove_sel } {
     # copy periodic box
     molinfo $keep_id set {a b c alpha beta gamma} \
         [molinfo $molid get {a b c alpha beta gamma}]a
+
+    return keep_id
 }
+
+# proc ::MergeTools::remove { molid remove_sel } {
+#     # delete all atoms within remove_sel
+#     set remove_sel [ validate_atomselect $molid $remove_sel ]
+#
+#     set seglist [$remove_sel get segid]
+#     set reslist [$remove_sel get resid]
+#
+#     # copy periodic box
+#
+#     molinfo $keep_id set {a b c alpha beta gamma} \
+#         [molinfo $molid get {a b c alpha beta gamma}]a
+# }
 
 interp alias {} mrg {} ::MergeTools::mrg
 package provide mergetools $::MergeTools::version
