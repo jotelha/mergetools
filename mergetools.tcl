@@ -206,7 +206,6 @@ proc ::MergeTools::mrg { args } {
       "overlap"
       "move"
       "remove"
-      "subtract"
       "get"
       "set"
       "report"
@@ -606,9 +605,6 @@ proc ::MergeTools::mrg { args } {
                 set position_limits [lindex $newargs 0]
                 set retval [move $molid $sel $ext $position_limits]
             }
-        }
-        "subtract" {
-            set retval [subtract $molid $sel [lindex $newargs 0]]
         }
         "remove" {
             set retval [remove $molid $sel [lindex $newargs 0]]
@@ -1279,17 +1275,9 @@ proc ::MergeTools::move { molid base_sel overlap_sel { position_limits "" } {ind
     variable overlap_distance
     variable compound
     variable compname
-    variable autojoin
-    variable autowrap
-    variable bondlist
 
     set base_sel [ validate_atomselect $molid $base_sel ]
     set overlap_sel [ validate_atomselect $molid $overlap_sel ]
-
-    # when moving around molecules, it is desirable to have them joint
-    if { ![string equal $autojoin ""]} {
-        pbc join {*}[split $autojoin " "] -molid $molid -sel [$overlap_sel text] $bondlist -all -verbose
-    }
 
     set mobile_compounds [ mrg -sel $base_sel get mobile ]
     set forbidden_compounds [ mrg -sel $base_sel get forbidden ]
@@ -1376,17 +1364,15 @@ proc ::MergeTools::move { molid base_sel overlap_sel { position_limits "" } {ind
         vmdcon -warn [ format $fmtstr $indstr [ format "faile moving %3d ${compound}s." $nfailed ] ]
     }
     vmdcon -info [ format $fmtstr $indstr [ format "successfully moved %3d ${compound}s." $nmoved ] ]
-
-    # TODO: it might be necessary to wrap after each iteration
-    if { ![string equal $autowrap ""]} {
-        pbc wrap -molid $molid -sel [$overlap_sel text] {*}[split $autowrap " "] -all -verbose
-    }
 }
 
 
 proc ::MergeTools::move_one { molid base_sel move_sel position_origin position_offset {indlvl 0} {linewidth 180} } {
     # move move_sel until it has no overlap with base_sel anymore
     variable maxit
+    variable autojoin
+    variable autowrap
+    variable bondlist
 
     set parstr "- "
     set indstr " "
@@ -1431,36 +1417,21 @@ proc ::MergeTools::move_one { molid base_sel move_sel position_origin position_o
         vmdcon -info [ format $fmtstr $indstr [ format "move by: %26s" \
             [ format "%8.4f %8.4f %8.4f" {*}$cur_offset ] ] ]
 
+        # when moving around molecules, it is desirable to have them joint
+        if { ![string equal $autojoin ""]} {
+            pbc join {*}[split $autojoin " "] -molid $molid -sel [$move_sel text] $bondlist -all
+        }
         $move_sel moveby $cur_offset
+        # otherwise (for selecting overlap) it is desirable to have everything wrapped within the cell
+        # TODO: I am not sure whether the atomselct language handles PBC, thus this is the "safe" way.
+        if { ![string equal $autowrap ""]} {
+            pbc wrap -molid $molid -sel [$move_sel text] {*}[split $autowrap " "] -all
+        }
 
         $cur_overlapping delete
     }
     incr indlvl -1
     return 0
-}
-
-proc ::MergeTools::subtract { molid base_sel remove_sel } {
-    # creates new molecule from base_sel, with remove_sel removed
-    variable compname
-    variable compound
-    variable autojoin
-    set base_sel [ validate_atomselect $molid $base_sel ]
-    set remove_sel [ validate_atomselect $molid $remove_sel ]
-    # TODO: check for same molid
-
-    # weird behavior in directly using negated selection text here, i.e.
-    # set keep_sel [atomselect $molid "[$base_sel text] and not [$remove_sel text]"]
-    # my susppect is the exwithin mechanism
-    # TODO: check source of issue and adapt selection texts elsewhere in this
-    # package if necessary. Workaround for now: Selections based on compound.
-    set base_compounds [lsort -unique -integer [$base_sel get $compound]]
-    set remove_compounds [lsort -unique -integer [$remove_sel get $compound]]
-
-    set keep_compounds [struct::set difference $base_compounds $remove_compounds]
-    set keep_sel [atomselect $molid "$compound $keep_compounds"]
-
-    $keep_sel uplevel 1
-    return $keep_sel
 }
 
 
@@ -1473,19 +1444,8 @@ proc ::MergeTools::remove { molid base_sel remove_sel } {
     set remove_sel [ validate_atomselect $molid $remove_sel ]
     # TODO: check for same molid
 
-    # weird behavior in directly using negated selection text here, i.e.
-    # set keep_sel [atomselect $molid "[$base_sel text] and not [$remove_sel text]"]
-    # my susppect is the exwithin mechanism
-    # TODO: check source of issue and adapt selection texts elsewhere in this
-    # package if necessary. Workaround for now: Selections based on compound.
-    set base_compounds [lsort -unique -integer [$base_sel get $compound]]
-    set remove_compounds [lsort -unique -integer [$remove_sel get $compound]]
 
-    set keep_compounds [lmap item $base_compounds {
-        if {$item ni $remove_compounds} {set item} else {continue}
-    }]
-    # set keep_compounds [struct::set difference $base_compounds $remove_compounds]
-    set keep_sel [atomselect $molid "$compound $keep_compounds"]
+    set keep_sel [atomselect $molid "([$base_sel text]) and not ([$remove_sel text])"]
     set keep_id [::TopoTools::selections2mol [list $keep_sel]]
 
     # copy periodic box
@@ -1501,28 +1461,6 @@ proc ::MergeTools::remove { molid base_sel remove_sel } {
 
     $keep_sel delete
     return $keep_id
-}
-
-
-proc ::MergeTools::lmap args {
-    set body [lindex $args end]
-    set args [lrange $args 0 end-1]
-    set n 0
-    set pairs [list]
-    foreach {varnames listval} $args {
-        set varlist [list]
-        foreach varname $varnames {
-            upvar 1 $varname var$n
-            lappend varlist var$n
-            incr n
-        }
-        lappend pairs $varlist $listval
-    }
-    set temp [list]
-    foreach {*}$pairs {
-        lappend temp [uplevel 1 $body]
-    }
-    set temp
 }
 
 

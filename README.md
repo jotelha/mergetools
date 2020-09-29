@@ -122,15 +122,32 @@ set substrate_system [atomselect $substrate_system_id all]
 # particle system selections
 set particle_system [atomselect $particle_system_id all]
 
-# merge command allows to automatically wrap and join via pbctools if desired
-mrg set autowrap residue autojoin residue
+# set the compound hierarchy level at which MergeTools will operate
 mrg set compound residue compname resname
+# several subcommands allow to automatically wrap or join via pbctools.
+# (look at the implementation of merge, move_one, and remove for details)
+mrg set autowrap atom autojoin residue
+# With `autwrap atom`, the initial merge command will wrap all atoms
+# into the periodic cell. This will split molecules on the cell boundary but
+# make exhaustive overlap selection possible in subsequent steps. With an
+# additional `autojoin residue`, the `move` command will join each possibly
+# split compound at the residue level before moving and wrap again at the atom
+# level after moving. Eventually, the `remove` command will perform a final
+# residue join for the resulting non-overlapping system.
+mrg set bondlist on
+# This is an option touching `pbctools` internal joining algorithm. It's turned
+# on here per default and recommended, but slow. Furthermore, it requires
+# pbctools 3.0 (not shipped with VMD 1.9.3) to work properly.
+
+# marking the system's compounds as dispensible, mobile and immobile
 mrg set dispensable SOL
 mrg set immobile AUM
-# remaining compounds are treated as 'mobile' if not set explicitly
+# remaining compounds are treated as 'mobile' if not set explicitly,
+# thus the follwoing line is redundant under the assumption both substrate
+# and particel system contain only SOL, AUM, NA, CL
 mrg set mobile NA CL
 
-# list categorized compunds in both systems
+# list categorized compounds in both systems
 mrg -sel $substrate_system report compounds
 mrg -sel $particle_system report compounds
 
@@ -172,8 +189,12 @@ set overlap_to_remove [mrg -sel $base overlap removable $ext]
 # 'base' that overlap with anything in 'ext' that has not been selected.
 # Just as 'merge' will 'remove' leave the input system attached and elevate
 # the system subtracted by the identified dispensable overlap to a new molid.
-set nonoverlap_id [mrg -sel $merged remove $overlap_to_remove]
-mrg -molid $nonoverlap_id -sel all report compound
+set keep_id [mrg -sel $merged remove $overlap_to_remove]
+set keep [atomselect $keep_id all]
+
+mrg -molid $keep_id -sel $keep report compound; list
+
+$keep writepdb default.pdb; list
 
 # visualization
 pbc box -on
@@ -181,7 +202,7 @@ pbc box -on
 mol off $substrate_system_id
 mol off $particle_system_id
 mol off $merged_id
-mol on $nonoverlap_id
+mol on $keep_id
 
 # merged systen representations
 mol delrep 0 $merged_id
@@ -205,7 +226,7 @@ mol showrep $merged_id $nonsolvent_rep off
 mol showrep $merged_id $removed_overlap_rep on
 
 # overlap-free system representations
-mol modselect 0 $nonoverlap_id "not resname SOL"
+mol modselect 0 $keep_id "not resname SOL"
 ```
 
 ## Installation
