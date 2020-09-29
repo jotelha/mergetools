@@ -16,18 +16,13 @@
 #   vmd> set dry_ext [atomselect $ext_id "not resname SOL"]
 #   vmd> merge $base $dry_ext
 #
-# Double-check for section
-#   Info) Identify ovelap...
-#   Info) #atoms in overlapping SOD:                0
-#   Info) #atoms in overlapping TIP3:            9354
-#   Info) #atoms in overlapping SDS:                0
-# in output to make sure only water has been removed.
-#
+# Refer to README.md for more iformation and examples.
 namespace eval ::MergeTools:: {
     variable version 0.1
 
     package require topotools
     package require pbctools
+    package require struct::set
 
     # distance within which molecules are regarded as overlapping
     variable overlap_distance 2.0
@@ -35,11 +30,14 @@ namespace eval ::MergeTools:: {
 
     variable autowrap "-nocompound"
     variable autojoin "residue"
+    variable bondlist "-bondlist"
 
     variable compound "residue"
     variable compname "resname"
 
-    variable negative_keywords {"no" "none" "off" "false"}
+    variable negative_keywords {"no" "none" "off" "false" "0"}
+    variable positive_keywords {"yes" "on" "true" "1"}
+
 
     variable valid_autowrap_vals [list \
         {*}$negative_keywords \
@@ -52,6 +50,10 @@ namespace eval ::MergeTools:: {
 
     variable valid_compound_vals [list \
         "res" "resid" "residue" "seg" "segid" "chain" "fragment"]
+
+    variable valid_compname_vals [list \
+        "resname" "segname" ]
+    # what else?
 
     variable immobile_compounds {}
     variable mobile_compounds -1
@@ -73,37 +75,13 @@ proc ::MergeTools::usage {} {
     vmdcon -info ""
     vmdcon -info "usage:  <command> \[args...\] <flags>"
     vmdcon -info ""
+    vmdcon -info "        Please refer to the README.md file shipped with this"
+    vmdcon -info "        package for detailed usage information."
     vmdcon -info ""
     vmdcon -info "common flags (not implemented):"
     vmdcon -info ""
     vmdcon -info "  -molid     <num>|top    molecule id (default: 'top')"
     vmdcon -info "  -sel       <selection>  atom selection function or text (default: 'all')"
-    vmdcon -info ""
-    vmdcon -info ""
-    vmdcon -info "commands:"
-    vmdcon -info ""
-    vmdcon -info "  help                                          prints this message"
-    vmdcon -info ""
-    vmdcon -info "  info                                          display system information."
-    vmdcon -info "  join <key>                                    (re-)joins residues split across boundries."
-    vmdcon -info "  wrap <key>                                    wrap system into one periodic image."
-    vmdcon -info ""
-    vmdcon -info "key - value pairs"
-    vmdcon -info ""
-    vmdcon -info "  join:   residue           "
-    vmdcon -info "  set:    bb                bounding box ({ { float float float } { float float float } })"
-    vmdcon -info "          distance          desired distance between surface and indenter (float)"
-    vmdcon -info "          interfaceInfile   input LAMMPS data file of interface (str)"
-    vmdcon -info "          indenterInfile    input LAMMPS data file of indenter (str)"
-    vmdcon -info "          outputPrefix      output prefix prepended to all resulting files (str)"
-    vmdcon -info "  show:   nonsolvent        "
-    vmdcon -info "          solvent           "
-    vmdcon -info "          surfactant        "
-    vmdcon -info "  use:    sds               "
-    vmdcon -info "          ctab              "
-    vmdcon -info "  wrap:   atom              "
-    vmdcon -info "          residue           "
-    vmdcon -info ""
     vmdcon -info ""
     vmdcon -info "sample usage:"
     vmdcon -info ""
@@ -129,12 +107,6 @@ proc ::MergeTools::usage {} {
     vmdcon -info "  vmd> set overlap_to_remove \[mrg -sel \$base overlap removable \$ext]"
     vmdcon -info "  vmd> set nonoverlap_id \[mrg -sel \$merged remove \$overlap_to_remove\]"
     vmdcon -info ""
-    vmdcon -info "will use parameters for SDS, merge an interfacial system's 'interface.lammps'"
-    vmdcon -info "data file with an indenter's 'indenter.pdb', remove any overlap and write"
-    vmdcon -info "system.lammps, system.psf, system.pdb data files as well as a tga snapshot"
-    vmdcon -info "system.tga of the resulting system."
-    vmdcon -info ""
-    vmdcon -info ""
     vmdcon -info "Copyright (c) 2018-2020"
     vmdcon -info "              by Johannes Hoermann <johannes.hoermann@imtek.uni-freiburg.de>"
     vmdcon -info ""
@@ -149,8 +121,11 @@ proc ::MergeTools::mrg { args } {
     variable version
 
     variable negative_keywords
+    variable positive_keywords
     variable valid_autowrap_vals
     variable valid_autojoin_vals
+    variable valid_compound_vals
+    variable valid_compname_vals
 
     set molid -1
     set seltxt all
@@ -231,6 +206,7 @@ proc ::MergeTools::mrg { args } {
       "overlap"
       "move"
       "remove"
+      "subtract"
       "get"
       "set"
       "report"
@@ -243,12 +219,15 @@ proc ::MergeTools::mrg { args } {
         "autowrap"
         "base"
         "compound"
+        "compname"
         "compnames"
         "dispensable"
         "ext"
         "forbidden"
         "immobile"
         "mobile"
+        "maxit"
+        "overlap"
     }
 
     if {[lsearch -exact $validcmd $cmd] < 0} {
@@ -303,9 +282,33 @@ proc ::MergeTools::mrg { args } {
                     }
                 }
 
+                bondlist {
+                    variable bondlist
+                    if {[string equal $bondlist ""]} {
+                        set retval 0
+                    } else {
+                        set retval 1
+                    }
+                }
+
                 compound {
                     variable compound
                     set retval $compound
+                }
+
+                compname {
+                    variable compname
+                    set retval $compname
+                }
+
+                overlap {
+                    variable overlap_distance
+                    set retval $overlap_distance
+                }
+
+                maxit {
+                    variable maxit
+                    set retval $maxit
                 }
 
                 compnames {
@@ -401,6 +404,16 @@ proc ::MergeTools::mrg { args } {
                         set newargs [lrange $newargs 1 end]
                     }
 
+                    bondlist {
+                        set val [lindex $newargs 0]
+                        if {$val in $positive_keywords} {
+                            variable bondlist "-bondlist"
+                        } else {
+                            variable bondlist ""
+                        }
+                        set newargs [lrange $newargs 1 end]
+                    }
+
                     compound {
                         set val [lindex $newargs 0]
                         if {$val ni $valid_compound_vals} {
@@ -409,6 +422,28 @@ proc ::MergeTools::mrg { args } {
                         }
                         variable compound $val
                         set newargs [lrange $newargs 1 end]
+                    }
+
+                    compname {
+                        set val [lindex $newargs 0]
+                        if {$val ni $valid_compname_vals} {
+                        		vmdcon -err "'merge set $key' allows choice from '$valid_compname_vals'"
+                            return
+                        }
+                        variable compname $val
+                        set newargs [lrange $newargs 1 end]
+                    }
+
+                    overlap {
+                        set val [lindex $newargs 0]
+                        variable overlap_distance $val
+                        set newargs [lrange $newargs 1 end]
+                    }
+
+                    maxit {
+                      set val [lindex $newargs 0]
+                      variable maxit $val
+                      set newargs [lrange $newargs 1 end]
                     }
 
                     base {
@@ -562,7 +597,18 @@ proc ::MergeTools::mrg { args } {
             $retval uplevel 1
         }
         "move" {
-            set retval [move $molid $sel [lindex $newargs 0]]
+            set ext [lindex $newargs 0]
+            set newargs [lrange $newargs 1 end]
+            if {[llength $newargs] == 0} {
+                set retval [move $molid $sel $ext]
+            } else {
+                # position_limits explicitly specified
+                set position_limits [lindex $newargs 0]
+                set retval [move $molid $sel $ext $position_limits]
+            }
+        }
+        "subtract" {
+            set retval [subtract $molid $sel [lindex $newargs 0]]
         }
         "remove" {
             set retval [remove $molid $sel [lindex $newargs 0]]
@@ -647,13 +693,9 @@ proc ::MergeTools::merge { molid base_sel ext_sel } {
     # TODO: separate validation
     # set base_sel [validate_atomselect $molid $base_sel]
 
-    # $base_sel global
-    # $ext_sel global
-    # vmd -info "#1"
     set merged_id [::TopoTools::selections2mol "$base_sel $ext_sel"]
     set base_id [$base_sel molid]
     set ext_id [$ext_sel molid]
-    # vmd -info "#2"
 
     vmdcon -info "  Merged extension 'atomselect $ext_id \"[$ext_sel text]\"' into base 'atomselect \"$base_id [$base_sel text]\"' under molid $merged_id."
 
@@ -682,11 +724,10 @@ proc ::MergeTools::merge { molid base_sel ext_sel } {
     vmdcon -info [format "%30s" "#atoms in merged system:"] [format "%12d" [$merged num]]
 
     $merged global
+
+    # for selecting overlaps, it is desirable to have all atoms within the cell
     if { ![string equal $autowrap ""]} {
         pbc wrap -molid $merged_id -sel [$merged text] {*}[split $autowrap " "] -all -verbose
-    }
-    if { ![string equal $autojoin ""]} {
-        pbc join {*}[split $autojoin " "] -molid $merged_id -sel [$merged text] -bondlist -all -verbose
     }
 
     $merged delete
@@ -706,22 +747,8 @@ proc ::MergeTools::overlap { molid base_sel ext_sel {ex "ex"} } {
         "([$ext_sel text]) and (same $compound as (${ex}within $overlap_distance of [$base_sel text]))" ]
 
     # TODO: nasty legacy behavior in VMD, see https://www.ks.uiuc.edu/Research/vmd/mailing_list/vmd-l/21856.html
-    # $overlap global won't work for the caller, thus upproc 1 necessary. Replace elsewhere.
-    # $overlap global
-    # upproc 1 $overlap
-
-    # remove a current tie, if it exists
-    # uplevel 1 [list trace vdelete upproc_var_$overlap u upproc_del]
-    # # ignore if not a number, else raise the level, since I'm in a proc
-    # # if {! [catch {expr $level}]} {incr level}
-    # # make the local variable (I never use the actual definition)
-    # uplevel 1 [list set upproc_var_$overlap 1]
-    # # set the trace
-    # uplevel 1 [list trace variable upproc_var_$overlap u upproc_del]
-    #
-    # #$overlap global
+    # $overlap global won't work for the caller, thus upproc 1 necessary.
     $overlap uplevel 1
-    # vmdcon -info "overlap sel: [$overlap text]"
     return $overlap
 }
 
@@ -955,10 +982,6 @@ proc ::MergeTools::overlap_internal { molid base_sel {indlvl 0} {linewidth 180} 
 
             puts -nonewline "."
             flush stdout
-            # if {[expr $count % ($tot_count / $linewidth)] == 0} {
-            #     puts -nonewline "."
-            #     flush stdout
-            # }
             incr count
         }
         incr indlvl -1
@@ -1256,9 +1279,17 @@ proc ::MergeTools::move { molid base_sel overlap_sel { position_limits "" } {ind
     variable overlap_distance
     variable compound
     variable compname
+    variable autojoin
+    variable autowrap
+    variable bondlist
 
     set base_sel [ validate_atomselect $molid $base_sel ]
     set overlap_sel [ validate_atomselect $molid $overlap_sel ]
+
+    # when moving around molecules, it is desirable to have them joint
+    if { ![string equal $autojoin ""]} {
+        pbc join {*}[split $autojoin " "] -molid $molid -sel [$overlap_sel text] $bondlist -all -verbose
+    }
 
     set mobile_compounds [ mrg -sel $base_sel get mobile ]
     set forbidden_compounds [ mrg -sel $base_sel get forbidden ]
@@ -1312,11 +1343,6 @@ proc ::MergeTools::move { molid base_sel overlap_sel { position_limits "" } {ind
 
         set overlap_compname_sel [atomselect $molid "[$overlap_sel text] and $compname $compnameval" ]
 
-        # vmdcon -info ""
-        # vmdcon -info [ format $fmtstr $indstr "overlap ${compound}s of $compname $compnameval" ]
-        # vmdcon -info ""
-        # report_compounds $molid $overlap_compname_sel $indlvl
-
         set unique_overlap_compound_ids [ lsort -unique -integer [ $overlap_compname_sel get $compound ] ]
 
         incr indlvl
@@ -1329,11 +1355,6 @@ proc ::MergeTools::move { molid base_sel overlap_sel { position_limits "" } {ind
 
             set cur_move_sel [ atomselect $molid "$compound $compid" ]
             set cur_forbidden_sel [ atomselect $molid "[$base_forbidden_sel text] and not $compound $compid" ]
-
-            # vmdcon -info ""
-            # vmdcon -info [ format $fmtstr $indstr "forbidden ${compound}s without current $compound $compid" ]
-            # vmdcon -info ""
-            # report_compounds $molid $cur_forbidden_sel $indlvl
 
             if { [ $cur_move_sel num ] == 0 } {
                 vmdcon -error [ format $fmtstr $indstr "selection empty, already removed!" ]
@@ -1355,6 +1376,11 @@ proc ::MergeTools::move { molid base_sel overlap_sel { position_limits "" } {ind
         vmdcon -warn [ format $fmtstr $indstr [ format "faile moving %3d ${compound}s." $nfailed ] ]
     }
     vmdcon -info [ format $fmtstr $indstr [ format "successfully moved %3d ${compound}s." $nmoved ] ]
+
+    # TODO: it might be necessary to wrap after each iteration
+    if { ![string equal $autowrap ""]} {
+        pbc wrap -molid $molid -sel [$overlap_sel text] {*}[split $autowrap " "] -all -verbose
+    }
 }
 
 
@@ -1413,22 +1439,90 @@ proc ::MergeTools::move_one { molid base_sel move_sel position_origin position_o
     return 0
 }
 
-
-proc ::MergeTools::remove { molid base_sel remove_sel } {
+proc ::MergeTools::subtract { molid base_sel remove_sel } {
     # creates new molecule from base_sel, with remove_sel removed
+    variable compname
+    variable compound
+    variable autojoin
     set base_sel [ validate_atomselect $molid $base_sel ]
     set remove_sel [ validate_atomselect $molid $remove_sel ]
     # TODO: check for same molid
 
-    set keep_sel [atomselect $molid "[$base_sel text] and not [$remove_sel text]"]
-    variable keep_id [::TopoTools::selections2mol $keep_sel]
+    # weird behavior in directly using negated selection text here, i.e.
+    # set keep_sel [atomselect $molid "[$base_sel text] and not [$remove_sel text]"]
+    # my susppect is the exwithin mechanism
+    # TODO: check source of issue and adapt selection texts elsewhere in this
+    # package if necessary. Workaround for now: Selections based on compound.
+    set base_compounds [lsort -unique -integer [$base_sel get $compound]]
+    set remove_compounds [lsort -unique -integer [$remove_sel get $compound]]
+
+    set keep_compounds [struct::set difference $base_compounds $remove_compounds]
+    set keep_sel [atomselect $molid "$compound $keep_compounds"]
+
+    $keep_sel uplevel 1
+    return $keep_sel
+}
+
+
+proc ::MergeTools::remove { molid base_sel remove_sel } {
+    # creates new molecule from base_sel, with remove_sel removed
+    variable compname
+    variable compound
+    variable autojoin
+    set base_sel [ validate_atomselect $molid $base_sel ]
+    set remove_sel [ validate_atomselect $molid $remove_sel ]
+    # TODO: check for same molid
+
+    # weird behavior in directly using negated selection text here, i.e.
+    # set keep_sel [atomselect $molid "[$base_sel text] and not [$remove_sel text]"]
+    # my susppect is the exwithin mechanism
+    # TODO: check source of issue and adapt selection texts elsewhere in this
+    # package if necessary. Workaround for now: Selections based on compound.
+    set base_compounds [lsort -unique -integer [$base_sel get $compound]]
+    set remove_compounds [lsort -unique -integer [$remove_sel get $compound]]
+
+    set keep_compounds [lmap item $base_compounds {
+        if {$item ni $remove_compounds} {set item} else {continue}
+    }]
+    # set keep_compounds [struct::set difference $base_compounds $remove_compounds]
+    set keep_sel [atomselect $molid "$compound $keep_compounds"]
+    set keep_id [::TopoTools::selections2mol [list $keep_sel]]
 
     # copy periodic box
     molinfo $keep_id set {a b c alpha beta gamma} \
-        [molinfo $molid get {a b c alpha beta gamma}]a
+        [molinfo $molid get {a b c alpha beta gamma}]
+
+    # it might be desired to join split residues as this is usually the last
+    # step of mergin systems
+    # TODO: autowrapping and joining might be desirable at other places as well
+    if { ![string equal $autojoin ""]} {
+        pbc join {*}[split $autojoin " "] -molid $keep_id -sel all -bondlist -all -verbose
+    }
 
     $keep_sel delete
     return $keep_id
+}
+
+
+proc ::MergeTools::lmap args {
+    set body [lindex $args end]
+    set args [lrange $args 0 end-1]
+    set n 0
+    set pairs [list]
+    foreach {varnames listval} $args {
+        set varlist [list]
+        foreach varname $varnames {
+            upvar 1 $varname var$n
+            lappend varlist var$n
+            incr n
+        }
+        lappend pairs $varlist $listval
+    }
+    set temp [list]
+    foreach {*}$pairs {
+        lappend temp [uplevel 1 $body]
+    }
+    set temp
 }
 
 
