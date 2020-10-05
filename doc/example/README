@@ -1,0 +1,9 @@
+Unpack data files first, i.e. with
+
+    cd dat && gunzip *.gz
+
+then run, i.e. with
+
+    vmd -e run.tcl
+
+from within this directory.
