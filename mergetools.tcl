@@ -283,7 +283,7 @@ proc ::MergeTools::mrg { args } {
 
                 bondlist {
                     variable bondlist
-                    if {[string equal $bondlist ""]} {
+                    if {[string equal $bondlist "-nobondlist"]} {
                         set retval 0
                     } else {
                         set retval 1
@@ -408,7 +408,7 @@ proc ::MergeTools::mrg { args } {
                         if {$val in $positive_keywords} {
                             variable bondlist "-bondlist"
                         } else {
-                            variable bondlist ""
+                            variable bondlist "-nobondlist"
                         }
                         set newargs [lrange $newargs 1 end]
                     }
@@ -1440,6 +1440,7 @@ proc ::MergeTools::remove { molid base_sel remove_sel } {
     variable compname
     variable compound
     variable autojoin
+    variable bondlist
     set base_sel [ validate_atomselect $molid $base_sel ]
     set remove_sel [ validate_atomselect $molid $remove_sel ]
     # TODO: check for same molid
@@ -1456,7 +1457,7 @@ proc ::MergeTools::remove { molid base_sel remove_sel } {
     # step of mergin systems
     # TODO: autowrapping and joining might be desirable at other places as well
     if { ![string equal $autojoin ""]} {
-        pbc join {*}[split $autojoin " "] -molid $keep_id -sel all -bondlist -all -verbose
+        pbc join {*}[split $autojoin " "] -molid $keep_id -sel all $bondlist -all -verbose
     }
 
     $keep_sel delete
