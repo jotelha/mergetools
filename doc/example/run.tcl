@@ -77,7 +77,7 @@ set consecutive_resid 0; list
 foreach sel [list $substrate_system $particle_system] {
     lappend resid_offsets $consecutive_resid; list
     set prev_resid -1; list
-    set resid_list  [list]; list
+    set resid_list [list]; list
     foreach cur_resid [$sel get resid] {
         if { $cur_resid != $prev_resid } {
             set prev_resid $cur_resid; list
@@ -141,13 +141,19 @@ set xy_shift [list \
 $particle_system moveby $xy_shift; list
 
 ## mergetools
+vmdcon -info ""
 vmdcon -info "############################"
 vmdcon -info "### configure MergeTools ###"
 vmdcon -info "############################"
+vmdcon -info ""
 
+# Simply spekaing, autowrap atom makes sure all atoms are wrapped into the
+# cell before selecting overlaps, autojoin makes sure components are connected
+# afterwards again. If topology information on bonds is available, then set
+# "bondlist on", otherwise off.
 mrg set autowrap atom autojoin resid; list
 mrg set compound resid compname resname; list
-mrg set bondlist on; list
+mrg set bondlist off; list
 mrg set dispensable $solvent_resname; list
 mrg set immobile $substrate_resname; list
 mrg set mobile $surfactant_resname $counterion_resname; list
@@ -204,6 +210,17 @@ set keep [atomselect $keep_id all]; list
 mrg -molid $keep_id -sel $keep report compound; list
 
 # write output
+set consecutive_resid 0; list
+set prev_resid -1; list
+set resid_list [list]; list
+foreach cur_resid [$keep get resid] {
+    if { $cur_resid != $prev_resid } {
+        set prev_resid $cur_resid; list
+        incr consecutive_resid; list
+    }
+    lappend resid_list [expr ($consecutive_resid - 1) % 9999 + 1] ; list
+}
+$keep set resid $resid_list; list
 $keep writepdb default.pdb; list
 
 ## visualization 
