@@ -16,7 +16,7 @@
 #   vmd> set dry_ext [atomselect $ext_id "not resname SOL"]
 #   vmd> merge $base $dry_ext
 #
-# Refer to README.md for more iformation and examples.
+# Refer to README.md for more information and examples.
 namespace eval ::MergeTools:: {
     variable version 0.1
 
@@ -683,15 +683,24 @@ proc ::MergeTools::validate_atomselect { molid val } {
 proc ::MergeTools::merge { molid base_sel ext_sel } {
     variable autowrap
     variable autojoin
+    variable bondlist
     variable compound
     variable compname
 
     # TODO: separate validation
     # set base_sel [validate_atomselect $molid $base_sel]
 
-    set merged_id [::TopoTools::selections2mol "$base_sel $ext_sel"]
     set base_id [$base_sel molid]
     set ext_id [$ext_sel molid]
+
+    # join before merging if desired 
+    # TODO: allow to configure subselection of joinable components for performance
+    if { ![string equal $autojoin ""]} {
+        pbc join {*}[split $autojoin " "] -molid $base_id -sel [$base_sel text] $bondlist -all
+        pbc join {*}[split $autojoin " "] -molid $ext_id -sel [$ext_sel text] $bondlist -all
+    }
+
+    set merged_id [::TopoTools::selections2mol "$base_sel $ext_sel"]
 
     vmdcon -info "  Merged extension 'atomselect $ext_id \"[$ext_sel text]\"' into base 'atomselect \"$base_id [$base_sel text]\"' under molid $merged_id."
 
@@ -1457,7 +1466,7 @@ proc ::MergeTools::remove { molid base_sel remove_sel } {
     # step of mergin systems
     # TODO: autowrapping and joining might be desirable at other places as well
     if { ![string equal $autojoin ""]} {
-        pbc join {*}[split $autojoin " "] -molid $keep_id -sel all $bondlist -all -verbose
+        pbc join {*}[split $autojoin " "] -molid $keep_id -sel all $bondlist -all
     }
 
     $keep_sel delete
