@@ -1,24 +1,16 @@
 #!/usr/bin/tclsh
-# mergetool, a VMD package to merge overlapping molecular systems in  VMD with
+# mergetool, a VMD package to merge overlapping molecular systems in VMD with
 # the help of TopoTools and PbcTools.
 #
 # Copyright (c) 2018-2020
 #               by Johannes Hoermann <johannes.hoermann@imtek.uni-freiburg.de>
 #
-# $Id: mergetool.tcl,v 0.1 2020/09/19 $
-#
-# Sample usage for merging to systems
-#
-#   vmd> package require mergetool
-#   vmd> set base_id [mol new base.gro waitfor all]
-#   vmd> set ext_id [mol new ext.gro waitfor all]
-#   vmd> set base [atomselect $base_id all]
-#   vmd> set dry_ext [atomselect $ext_id "not resname SOL"]
-#   vmd> merge $base $dry_ext
+# $Id: mergetool.tcl,v 0.2 2020/10/07 $
 #
 # Refer to README.md for more information and examples.
+#
 namespace eval ::MergeTools:: {
-    variable version 0.1
+    variable version 0.2
 
     package require topotools
     package require pbctools

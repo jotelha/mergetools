@@ -1,4 +1,4 @@
-# VMD MergeTools package. Version 0.1
+# VMD MergeTools package. Version 0.2
 
 
 ## Overview
@@ -9,10 +9,10 @@ that helps to merge two (solvated) systems.
 ## Dependencies
 
 - required:
-  - topotools 1.8
-- optional:
-  - pbctools 3.0:
-    - tcllib 1.20
+  - topotools v1.8
+  - pbctools 
+    - v3.0 with tcllib 1.20 for correct 'bondlist' treatment of connected components
+    - https://github.com/frobnitzem/pbctools/pull/6 for distinct 'resid' and 'residue' entity support
 
 ## Interface
 
@@ -30,16 +30,20 @@ Valid `$subommand`s and `$subsubcommand`s are
 * `set` sets MergeTools-wide properties
   * `autowrap`, defaults to `atom`, valid choices are `atom`, `res`, `resid`,
                 `residue`, `seg`, `segid`, `chain`, `fragment`, `off`, (de-)
-                activates automatic wrapping in `merge` command.
+                activates automatic wrapping at certain locations in `merge` 
+                and `move` commands.
   * `autojoin`, defaults to `residue`,
                 valid choices are `res`, `resid`, `residue`, `seg`, `segid`,
                 `chain`, `fragment`, `bonded`, `connected`, `off`, (de-)
-                activates automatic wrapping in `merge` command. First
-                wrapping and then joining can fix "dirty" systems where
-                molecules might be split across periodic boundaries without
-                proper track-keeping of image flags.
-  * `bondlist`, defaults to `on`, valid choces are `on` and `off`. Uses
+                activates automatic joining at certain locations in in `merge`,
+                `move`, and `remove` commands. First wrapping and then joining 
+                at the right locations within a workflow can fix "dirty" systems
+                where molecules might be split across periodic boundaries
+                without proper track-keeping of image flags.
+  * `bondlist`, defaults to `on`, valid choices are `on` and `off`. Uses
                 reliable, but slow algorithm for joining split compounds.
+                Recommended to turn on for pbctools >= v3.0 and explicit
+                bonding topology information available.
                 See the `pbctools` (https://github.com/frobnitzem/pbctools)
                 documentation for details.
   * `compound`, defaults to `residue`, modify to operate on different hierarchy
@@ -134,10 +138,10 @@ mrg set autowrap atom autojoin residue
 # split compound at the residue level before moving and wrap again at the atom
 # level after moving. Eventually, the `remove` command will perform a final
 # residue join for the resulting non-overlapping system.
-mrg set bondlist on
+mrg set bondlist off
 # This is an option touching `pbctools` internal joining algorithm. It's turned
-# on here per default and recommended, but slow. Furthermore, it requires
-# pbctools 3.0 (not shipped with VMD 1.9.3) to work properly.
+# on per default but requires pbctools >= 3.0 (not shipped with VMD 1.9.3) 
+# and bonding topology information to work properly.
 
 # marking the system's compounds as dispensible, mobile and immobile
 mrg set dispensable SOL
@@ -229,18 +233,21 @@ mol showrep $merged_id $removed_overlap_rep on
 mol modselect 0 $keep_id "not resname SOL"
 ```
 
+For a thorough sample treatment of large "dirty" systems witth compounds split
+accross periodic boundaries, see the `doc/example` subfolder.
+
 ## Installation
 
 MergeTools is written entirely in the Tcl scripting language for use as a plugin
 with VMD. You can place all files within the same directory as this `README.md`
 file within your VMD Plugin directory `$PLUGINDIR` under
 `$PLUGINDIR/noarch/tcl/mergetools${MRG_VERSION}`, where `${MRG_VERSION}` must
-be the current version of this package, i.e. `0.1`. Alternatively, place it at
+be the current version of this package, i.e. `0.2`. Alternatively, place it at
 any location (still within a directory `mergetools${MRG_VERSION}`) and make
 sure to point the environment variable `TCLLIBPATH` to the parent directory
 of this location before launching VMD, i.e.
 `export TCLLIBPATH="$HOME/path/to/my/tcl/libs $TCLLIBPATH"` if this plugin is
-placed at `$HOME/path/to/my/tcl/libs/mergetools0.1`. Note that the path
+placed at `$HOME/path/to/my/tcl/libs/mergetools0.2`. Note that the path
 separator for `TCLLIBPATH` is a single space -- other than the colon typical
 for path variables on UNIX systems.
 

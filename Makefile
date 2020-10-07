@@ -2,7 +2,7 @@
 
 VMFILES = pkgIndex.tcl mergetools.tcl
 
-VMVERSION = 0.1
+VMVERSION = 0.2
 DIR = $(PLUGINDIR)/noarch/tcl/mergetools$(VMVERSION)
 
 bins:
