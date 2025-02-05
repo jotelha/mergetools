@@ -1,0 +1,10 @@
+cff-version: 1.1.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: Hörmann
+  given-names: Johannes Laurin
+  orcid: 0000-0001-5867-695X
+title: mergetools
+version: v0.2
+date-released: 2025-02-05
+                                
