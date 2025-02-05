@@ -1,5 +1,6 @@
 # VMD MergeTools package. Version 0.2
 
+[![DOI](https://zenodo.org/badge/297493149.svg)](https://doi.org/10.5281/zenodo.14810986)
 
 ## Overview
 
